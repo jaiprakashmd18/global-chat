@@ -30,6 +30,18 @@ const NEAR_BOTTOM_PX = 140;
 const AUTH_STORAGE_KEY = 'globalchat.auth';
 const NOTICE_KEY = 'globalchat.noticeDismissed';
 const TAB_ID = crypto.randomUUID();
+const TYPING_IDLE_MS = 4000;        // typing hint clears after this much quiet
+const FADE_BEFORE_MS = 5 * 60_000;  // messages fade in their last five minutes
+const PEOPLE_SHOWN = 60;            // longer online lists collapse to "+N more"
+const BASE_TITLE = document.title;
+
+const EMOJI = ['😀', '😂', '🥹', '😊', '😍', '🤩', '😎', '🤔', '😅', '😭', '😮', '😴', '🙃', '😬', '🥳', '🤯',
+  '👍', '👎', '👏', '🙌', '🙏', '👋', '🤝', '💪', '❤️', '🔥', '✨', '🎉', '💯', '✅', '👀', '🌍',
+  '☕', '🍕', '🎵', '🎮', '🌙', '☀️', '🌈', '🚀'];
+const STARTERS = ['Hello from somewhere 👋', 'What time is it where you are?', 'What are you listening to right now?'];
+
+// Links and @mentions inside message text. Usernames follow the server rule.
+const RICH_TOKEN = /(https?:\/\/[^\s<>"']+)|@([A-Za-z]{2,20}_[0-9]{4})\b/g;
 
 const SELECT_COLUMNS = 'id, username, content, created_at, expires_at';
 
@@ -67,6 +79,22 @@ const el = {
   reportSubmit: $('report-submit'),
   reportCancel: $('report-cancel'),
   aboutDialog: $('about-dialog'),
+  settingsDialog: $('settings-dialog'),
+  settingsForm: $('settings-form'),
+  notifyNote: $('notify-note'),
+  peopleDialog: $('people-dialog'),
+  peopleDialogSub: $('people-dialog-sub'),
+  sideOnlineCount: $('side-online-count'),
+  sidePeople: $('side-people'),
+  dialogPeople: $('dialog-people'),
+  typing: $('typing'),
+  emojiToggle: $('emoji-toggle'),
+  emojiPanel: $('emoji-panel'),
+  searchToggle: $('search-toggle'),
+  searchBar: $('search-bar'),
+  searchInput: $('search-input'),
+  searchCount: $('search-count'),
+  searchClose: $('search-close'),
   toasts: $('toasts'),
   captcha: $('captcha'),
   template: $('message-template'),
@@ -95,6 +123,15 @@ const state = {
   unseen: 0,
   reportTarget: null,
   reportSending: false,
+  presenceKey: null,
+  people: [],                    // [{ key, name, typing }] from presence
+  typing: false,
+  typingTimer: null,
+  filter: '',
+  titleUnread: 0,
+  titleMention: false,
+  prefs: window.GlobalChatPrefs?.load() ?? { theme: 'dark', accent: 'violet', density: 'comfortable', sound: false, notify: false },
+  audio: null,
   timeFormat: new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }),
   fullFormat: new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }),
 };
@@ -159,7 +196,9 @@ function setUsername(name) {
   // Re-mark own messages (e.g. after the server confirmed a different name).
   for (const { data, node } of state.messages.values()) {
     applyMine(node, data.username === name);
+    node.classList.toggle('is-mention', data.username !== name && mentionsMe(data.content));
   }
+  trackPresence();
 }
 
 function hueFor(name) {
@@ -368,10 +407,11 @@ function subscribeChannel() {
   const sb = state.sb;
   if (state.session) sb.realtime.setAuth(state.session.access_token);
 
+  state.presenceKey = crypto.randomUUID();  // random per connection, no user id
   const channel = sb.channel(ROOM_TOPIC, {
     config: {
       private: true,                          // RLS on realtime.messages applies
-      presence: { key: crypto.randomUUID() }, // random per connection, no user id
+      presence: { key: state.presenceKey },
     },
   });
   state.channel = channel;
@@ -388,7 +428,7 @@ function subscribeChannel() {
     })
     .on('presence', { event: 'sync' }, () => {
       if (channel !== state.channel) return;
-      renderOnline(Object.keys(channel.presenceState()).length);
+      syncPeople(channel.presenceState());
     })
     .subscribe(async (status, err) => {
       if (channel !== state.channel) return; // stale channel
@@ -397,7 +437,7 @@ function subscribeChannel() {
         state.everSubscribed = true;
         state.reconnectAttempts = 0;
         setConnection('live');
-        try { await channel.track({ at: new Date().toISOString() }); } catch { /* presence is best-effort */ }
+        await trackPresence();
         if (isReconnect) loadHistory({ backfill: true }); // fill any gap
       } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
         if (err) console.warn('[GlobalChat] realtime', status, err?.message ?? err);
@@ -475,6 +515,7 @@ function isValidMessage(m) {
 }
 
 const isExpired = (m) => Date.parse(m.expires_at) <= Date.now();
+const isFading = (m) => Date.parse(m.expires_at) - Date.now() < FADE_BEFORE_MS;
 const createdMs = (m) => Date.parse(m.created_at);
 
 function upsertMessages(list, { initial }) {
@@ -495,13 +536,18 @@ function upsertMessages(list, { initial }) {
   if (stick || includesMine) trimOverflow();
   updateFeedState();
 
+  const mentions = initial ? [] : fresh.filter((m) => m.username !== state.username && mentionsMe(m.content));
   if (initial || stick || includesMine) {
     scrollToBottom();
   } else {
     state.unseen += fresh.length;
-    showJump();
+    showJump(mentions.length > 0);
   }
-  if (!initial) pulseBrand();
+  if (!initial) {
+    pulseBrand();
+    noteUnread(fresh.filter((m) => m.username !== state.username).length, mentions);
+  }
+  if (state.filter) applyFilter();
 }
 
 function buildNode(m) {
@@ -510,9 +556,14 @@ function buildNode(m) {
   const expires = new Date(m.expires_at);
 
   node.dataset.id = m.id;
+  const hue = String(hueFor(m.username));
   paintAvatar(node.querySelector('.avatar'), m.username);
-  node.querySelector('.msg-name').textContent = m.username;
-  node.querySelector('.msg-text').textContent = m.content;   // safe: text only
+  const name = node.querySelector('.msg-name');
+  name.textContent = m.username;
+  name.style.setProperty('--hue', hue);
+  name.title = `Mention ${m.username}`;
+  name.addEventListener('click', () => insertMention(m.username));
+  renderRichText(node.querySelector('.msg-text'), m.content);  // safe: text nodes only
 
   const time = node.querySelector('.msg-time');
   time.dateTime = created.toISOString();
@@ -520,7 +571,10 @@ function buildNode(m) {
   time.title = `${state.fullFormat.format(created)}. Disappears at ${state.timeFormat.format(expires)}.`;
 
   node.querySelector('.msg-report').addEventListener('click', () => openReport(m.id));
+  node.querySelector('.msg-copy').addEventListener('click', () => copyMessage(m.content));
   applyMine(node, m.username === state.username);
+  node.classList.toggle('is-mention', m.username !== state.username && mentionsMe(m.content));
+  node.classList.toggle('is-fading', isFading(m));
   return node;
 }
 
@@ -590,13 +644,15 @@ function trimOverflow() {
 
 function startExpirySweep() {
   const sweep = () => {
-    for (const [id, { data }] of state.messages) {
+    for (const [id, { data, node }] of state.messages) {
       if (isExpired(data)) removeMessage(id);
+      else node.classList.toggle('is-fading', isFading(data));
     }
   };
   setInterval(sweep, EXPIRY_SWEEP_MS);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
+    clearUnread();
     sweep();
     if (state.sb && state.session && state.connection !== 'live') reconnectNow();
   });
@@ -616,8 +672,10 @@ function scrollToBottom() {
   el.jump.hidden = true;
 }
 
-function showJump() {
+function showJump(mention = false) {
   el.jumpText.textContent = state.unseen === 1 ? '1 new message' : `${state.unseen} new messages`;
+  if (el.jump.hidden) el.jump.classList.remove('has-mention');
+  if (mention) el.jump.classList.add('has-mention');
   el.jump.hidden = false;
 }
 
@@ -663,11 +721,19 @@ function showBanner(text, tone) {
 function renderOnline(n) {
   if (n == null) {
     el.onlineCount.textContent = '–';
+    el.sideOnlineCount.textContent = '–';
     el.sideOnline.textContent = 'Counting people online…';
+    el.peopleDialogSub.textContent = 'Counting people online…';
+    state.people = [];
+    renderPeople();
+    renderTyping();
     return;
   }
+  const label = n === 1 ? 'Just you online right now' : `${n.toLocaleString()} people online`;
   el.onlineCount.textContent = n.toLocaleString();
-  el.sideOnline.textContent = n === 1 ? 'Just you online right now' : `${n.toLocaleString()} people online`;
+  el.sideOnlineCount.textContent = n.toLocaleString();
+  el.sideOnline.textContent = label;
+  el.peopleDialogSub.textContent = label;
 }
 
 function showFeedState(kind, detail) {
@@ -698,6 +764,29 @@ function showFeedState(kind, detail) {
   if (kind === 'empty') {
     title.textContent = 'The room is quiet.';
     text.textContent = 'Nothing has been said in the last hour. Say hello and start the conversation.';
+    const starters = document.createElement('div');
+    starters.className = 'starters';
+    for (const line of STARTERS) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'starter';
+      b.textContent = line;
+      b.addEventListener('click', () => {
+        if (el.input.disabled) return;
+        el.input.value = line;
+        autosize();
+        updateComposer();
+        el.input.focus();
+      });
+      starters.append(b);
+    }
+    box.append(emptyArt(), title, text, starters);
+    return;
+  }
+
+  if (kind === 'no-results') {
+    title.textContent = 'No matches';
+    text.textContent = 'Nothing in the last hour matches your search.';
     box.append(title, text);
     return;
   }
@@ -726,7 +815,17 @@ function showFeedState(kind, detail) {
 function updateFeedState() {
   if (!state.historyLoaded) return;
   if (state.messages.size === 0) showFeedState('empty');
+  else if (state.filter && !el.list.querySelector('.msg:not([hidden])')) showFeedState('no-results');
   else el.feedState.replaceChildren();
+}
+
+// The brand mark, drawn larger for the empty room.
+function emptyArt() {
+  const mark = document.getElementById('brand-mark') ?? document.querySelector('.brand-mark');
+  const art = mark.cloneNode(true);
+  art.removeAttribute('id');
+  art.classList.add('feed-state-art');
+  return art;
 }
 
 function describeStartupError(err) {
@@ -834,6 +933,7 @@ async function sendMessage({ retried = false } = {}) {
     // Only clear if the user didn't keep typing while we were sending.
     if (el.input.value === raw) el.input.value = '';
     autosize();
+    setTyping(false);
     if (data.username !== state.username) setUsername(data.username);
     upsertMessages([data], { initial: false });
     scrollToBottom();
@@ -947,6 +1047,316 @@ async function submitReport(event) {
 }
 
 // =============================================================================
+// Rich text: links + @mentions, built from text nodes and elements only.
+// =============================================================================
+function renderRichText(target, text) {
+  target.replaceChildren();
+  let last = 0;
+  for (const match of text.matchAll(RICH_TOKEN)) {
+    const [whole, rawUrl, mention] = match;
+    let token = whole;
+    if (rawUrl) {
+      // Leave trailing punctuation ("see https://x.com.") outside the link.
+      token = rawUrl.replace(/[.,!?;:'")\]]+$/, '');
+      if (!token) continue;
+    }
+    if (match.index > last) target.append(text.slice(last, match.index));
+    if (rawUrl) target.append(linkNode(token));
+    else {
+      const span = document.createElement('span');
+      span.className = 'mention';
+      span.classList.toggle('is-me', mention === state.username);
+      span.textContent = token;
+      target.append(span);
+    }
+    last = match.index + token.length;
+  }
+  if (last < text.length) target.append(text.slice(last));
+}
+
+function linkNode(raw) {
+  let url;
+  try { url = new URL(raw); } catch { return document.createTextNode(raw); }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return document.createTextNode(raw);
+  const a = document.createElement('a');
+  a.href = url.href;
+  a.textContent = raw;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer nofollow ugc';
+  return a;
+}
+
+function mentionsMe(text) {
+  if (!state.username) return false;
+  for (const match of text.matchAll(RICH_TOKEN)) {
+    if (match[2] === state.username) return true;
+  }
+  return false;
+}
+
+function insertMention(name) {
+  if (el.input.disabled || name === state.username) return;
+  const tag = `@${name} `;
+  const { value, selectionStart, selectionEnd } = el.input;
+  const before = value.slice(0, selectionStart);
+  const pad = before && !/\s$/.test(before) ? ' ' : '';
+  el.input.value = before + pad + tag + value.slice(selectionEnd);
+  const caret = before.length + pad.length + tag.length;
+  el.input.setSelectionRange(caret, caret);
+  autosize();
+  updateComposer();
+  el.input.focus();
+}
+
+async function copyMessage(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Message copied.');
+  } catch {
+    toast('Couldn’t copy. Select the text and copy it instead.', 'danger');
+  }
+}
+
+// =============================================================================
+// Presence: who's online + typing hints
+// =============================================================================
+async function trackPresence() {
+  const channel = state.channel;
+  if (!channel || state.connection !== 'live' || !state.username) return;
+  try {
+    await channel.track({ name: state.username, typing: state.typing, at: new Date().toISOString() });
+  } catch { /* presence is best-effort */ }
+}
+
+function syncPeople(presence) {
+  const people = [];
+  for (const [key, metas] of Object.entries(presence)) {
+    const meta = metas?.[metas.length - 1] ?? {};
+    const name = typeof meta.name === 'string' && /^[A-Za-z]{2,20}_[0-9]{4}$/.test(meta.name) ? meta.name : null;
+    people.push({ key, name, typing: Boolean(meta.typing) && Boolean(name) });
+  }
+  // You first, then alphabetical; guests on older versions (no name) last.
+  people.sort((a, b) => (b.key === state.presenceKey) - (a.key === state.presenceKey)
+    || (a.name === null) - (b.name === null)
+    || (a.name ?? '').localeCompare(b.name ?? ''));
+  state.people = people;
+  renderOnline(people.length);
+  renderPeople();
+  renderTyping();
+}
+
+function renderPeople() {
+  for (const list of [el.sidePeople, el.dialogPeople]) {
+    list.replaceChildren();
+    for (const p of state.people.slice(0, PEOPLE_SHOWN)) {
+      const li = document.createElement('li');
+      li.className = 'person';
+      li.classList.toggle('is-typing', p.typing);
+      const avatar = document.createElement('span');
+      avatar.className = 'avatar';
+      avatar.setAttribute('aria-hidden', 'true');
+      paintAvatar(avatar, p.name ?? 'Guest');
+      const name = document.createElement('span');
+      name.className = 'person-name';
+      name.textContent = p.name ?? 'Guest';
+      li.append(avatar, name);
+      const isMe = p.key === state.presenceKey;
+      if (isMe || p.typing) {
+        const tag = document.createElement('span');
+        tag.className = 'person-tag';
+        tag.textContent = isMe ? 'you' : 'typing…';
+        li.append(tag);
+      }
+      list.append(li);
+    }
+    const extra = state.people.length - PEOPLE_SHOWN;
+    if (extra > 0) {
+      const li = document.createElement('li');
+      li.className = 'person-more';
+      li.textContent = `+${extra.toLocaleString()} more`;
+      list.append(li);
+    }
+  }
+}
+
+function renderTyping() {
+  const names = state.people.filter((p) => p.typing && p.key !== state.presenceKey).map((p) => p.name);
+  el.typing.replaceChildren();
+  if (!names.length) return;
+  const dots = document.createElement('span');
+  dots.className = 'typing-dots';
+  dots.setAttribute('aria-hidden', 'true');
+  dots.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
+  const text = names.length === 1 ? `${names[0]} is typing…`
+    : names.length === 2 ? `${names[0]} and ${names[1]} are typing…`
+    : `${names.length} people are typing…`;
+  el.typing.append(dots, text);
+}
+
+function setTyping(on) {
+  clearTimeout(state.typingTimer);
+  if (on) state.typingTimer = setTimeout(() => setTyping(false), TYPING_IDLE_MS);
+  if (state.typing === on) return;
+  state.typing = on;
+  trackPresence();
+}
+
+// =============================================================================
+// Unread counter in the tab title + mention alerts
+// =============================================================================
+function noteUnread(count, mentions) {
+  const away = document.visibilityState !== 'visible';
+  if (away && count > 0) {
+    state.titleUnread += count;
+    if (mentions.length) state.titleMention = true;
+    document.title = `${state.titleMention ? '@ ' : ''}(${state.titleUnread}) ${BASE_TITLE}`;
+  }
+  if (!mentions.length) return;
+  if (state.prefs.sound) playPing();
+  if (state.prefs.notify && away && 'Notification' in window && Notification.permission === 'granted') {
+    const m = mentions[mentions.length - 1];
+    try {
+      const n = new Notification(`${m.username} mentioned you`, { body: m.content.slice(0, 140), tag: 'globalchat-mention', silent: state.prefs.sound });
+      n.onclick = () => { window.focus(); n.close(); };
+    } catch { /* some browsers only allow notifications from a service worker */ }
+  }
+}
+
+function clearUnread() {
+  state.titleUnread = 0;
+  state.titleMention = false;
+  document.title = BASE_TITLE;
+}
+
+// A short two-note chime, synthesised so there's no audio file to load.
+function playPing() {
+  try {
+    state.audio ??= new AudioContext();
+    const ctx = state.audio;
+    if (ctx.state === 'suspended') ctx.resume();
+    const t = ctx.currentTime;
+    for (const [i, freq] of [[0, 880], [1, 1320]]) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const start = t + i * 0.11;
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.15, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.25);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.3);
+    }
+  } catch { /* audio is optional */ }
+}
+
+// =============================================================================
+// Search (filters what's on screen; everything here is at most an hour old)
+// =============================================================================
+function applyFilter() {
+  const q = state.filter.toLocaleLowerCase();
+  let shown = 0;
+  for (const { data, node } of state.messages.values()) {
+    const match = !q || data.content.toLocaleLowerCase().includes(q) || data.username.toLocaleLowerCase().includes(q);
+    node.hidden = !match;
+    if (match) shown++;
+  }
+  el.list.classList.toggle('is-filtering', Boolean(q));
+  el.searchCount.textContent = q ? (shown === 1 ? '1 match' : `${shown} matches`) : '';
+  updateFeedState();
+}
+
+function setSearchOpen(open) {
+  el.searchBar.hidden = !open;
+  el.searchToggle.setAttribute('aria-expanded', String(open));
+  if (open) {
+    el.searchInput.focus();
+  } else {
+    el.searchInput.value = '';
+    state.filter = '';
+    applyFilter();
+    scrollToBottom();
+  }
+}
+
+// =============================================================================
+// Emoji picker
+// =============================================================================
+function buildEmojiPanel() {
+  for (const emoji of EMOJI) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = emoji;
+    b.setAttribute('aria-label', `Insert ${emoji}`);
+    b.addEventListener('click', () => insertAtCursor(emoji));
+    el.emojiPanel.append(b);
+  }
+}
+
+function setEmojiOpen(open) {
+  el.emojiPanel.hidden = !open;
+  el.emojiToggle.setAttribute('aria-expanded', String(open));
+}
+
+function insertAtCursor(text) {
+  if (el.input.disabled) return;
+  const { value, selectionStart, selectionEnd } = el.input;
+  el.input.value = value.slice(0, selectionStart) + text + value.slice(selectionEnd);
+  const caret = selectionStart + text.length;
+  el.input.setSelectionRange(caret, caret);
+  autosize();
+  updateComposer();
+  el.input.focus({ preventScroll: true });
+}
+
+// =============================================================================
+// Settings: theme, accent, density, mention alerts
+// =============================================================================
+function fillSettingsForm() {
+  const f = el.settingsForm.elements;
+  for (const key of ['theme', 'accent', 'density']) {
+    for (const input of f[key]) input.checked = input.value === state.prefs[key];
+  }
+  f.sound.checked = state.prefs.sound;
+  f.notify.checked = state.prefs.notify;
+  showNotifyNote();
+}
+
+function showNotifyNote(text) {
+  if (!text && state.prefs.notify && 'Notification' in window && Notification.permission === 'denied') {
+    text = 'Notifications are blocked for this site in your browser settings.';
+  }
+  el.notifyNote.textContent = text ?? '';
+  el.notifyNote.hidden = !text;
+}
+
+async function onSettingsChange(e) {
+  const input = e.target;
+  const prefs = { ...state.prefs };
+  if (input.type === 'checkbox') prefs[input.name] = input.checked;
+  else prefs[input.name] = input.value;
+
+  let note;
+  if (input.name === 'notify' && input.checked) {
+    let permission = 'Notification' in window ? Notification.permission : 'unsupported';
+    if (permission === 'default') permission = await Notification.requestPermission().catch(() => 'denied');
+    if (permission !== 'granted') {
+      input.checked = false;
+      prefs.notify = false;
+      note = permission === 'unsupported'
+        ? 'This browser doesn’t support notifications.'
+        : 'Notifications are blocked for this site in your browser settings.';
+    }
+  }
+  if (input.name === 'sound' && input.checked) playPing();   // preview + unlock audio
+
+  state.prefs = prefs;
+  window.GlobalChatPrefs?.save(prefs);
+  showNotifyNote(note);
+}
+
+// =============================================================================
 // Toasts
 // =============================================================================
 function toast(text, tone) {
@@ -974,7 +1384,38 @@ function wireUI() {
   el.input.addEventListener('input', () => {
     autosize();
     updateComposer();
+    setTyping(el.input.value.trim().length > 0);
     if (!el.composerError.hidden && Date.now() >= state.cooldownUntil) showComposerError('');
+  });
+  el.input.addEventListener('blur', () => setTyping(false));
+
+  // Emoji
+  buildEmojiPanel();
+  el.emojiToggle.addEventListener('click', () => setEmojiOpen(el.emojiPanel.hidden));
+  document.addEventListener('click', (e) => {
+    if (!el.emojiPanel.hidden && !e.target.closest('.emoji-wrap')) setEmojiOpen(false);
+  });
+
+  // Search
+  el.searchToggle.addEventListener('click', () => setSearchOpen(el.searchBar.hidden));
+  el.searchClose.addEventListener('click', () => setSearchOpen(false));
+  el.searchInput.addEventListener('input', () => {
+    state.filter = el.searchInput.value.trim();
+    applyFilter();
+  });
+
+  // Keyboard: "/" jumps to the message box, Escape closes popovers.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (!el.emojiPanel.hidden) { setEmojiOpen(false); el.emojiToggle.focus(); }
+      else if (!el.searchBar.hidden && !document.querySelector('dialog[open]')) setSearchOpen(false);
+      return;
+    }
+    const typingInField = e.target.closest?.('input, textarea, [contenteditable="true"]');
+    if (e.key === '/' && !typingInField && !e.ctrlKey && !e.metaKey && !e.altKey && !el.input.disabled) {
+      e.preventDefault();
+      el.input.focus();
+    }
   });
 
   // Scrolling
@@ -995,6 +1436,7 @@ function wireUI() {
   }
 
   // Network
+  window.addEventListener('focus', clearUnread);
   window.addEventListener('offline', () => setConnection('offline'));
   window.addEventListener('online', () => {
     if (state.sb && state.session) { state.reconnectAttempts = 0; reconnectNow(); }
@@ -1010,9 +1452,14 @@ function wireUI() {
   // Dialogs
   document.querySelectorAll('[data-open-about]').forEach((b) =>
     b.addEventListener('click', () => el.aboutDialog.showModal()));
+  document.querySelectorAll('[data-open-settings]').forEach((b) =>
+    b.addEventListener('click', () => { fillSettingsForm(); el.settingsDialog.showModal(); }));
+  document.querySelectorAll('[data-open-people]').forEach((b) =>
+    b.addEventListener('click', () => el.peopleDialog.showModal()));
+  el.settingsForm.addEventListener('change', onSettingsChange);
   document.querySelectorAll('[data-close-dialog]').forEach((b) =>
     b.addEventListener('click', () => b.closest('dialog').close()));
-  for (const d of [el.aboutDialog, el.reportDialog]) {
+  for (const d of [el.aboutDialog, el.reportDialog, el.settingsDialog, el.peopleDialog]) {
     // Click on the backdrop closes the dialog.
     d.addEventListener('click', (e) => { if (e.target === d) d.close(); });
   }

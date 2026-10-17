@@ -6,6 +6,20 @@ GlobalChat is a single public chatroom. Anyone who opens the site gets a random 
 
 It's a static frontend (HTML, CSS, vanilla JS modules) on top of Supabase: anonymous auth, Postgres with Row Level Security, and Realtime for live messages and online presence.
 
+### Features
+
+- **Chat bubbles**: your messages on the right in your accent colour, everyone else on the left with a coloured avatar and name. Messages from one person in a row are grouped.
+- **Themes**: light, dark, or follow the system, with five accent colours (violet, ocean, sunset, mint, rose) and a compact density. Choices are saved in the browser only (`localStorage`).
+- **Online now**: a live list of who's in the room (sidebar on desktop, tap the online count on phones).
+- **Typing indicator**: "QuietFox_1937 is typing…" above the message box.
+- **@mentions**: click a name to mention them. Messages that mention you are highlighted, and you can turn on a sound and/or a desktop notification for mentions.
+- **Links**: `http(s)` URLs become safe links (`rel="noopener noreferrer nofollow ugc"`).
+- **Emoji picker**, **message search**, **copy message**, **unread count in the tab title**, and quick conversation starters when the room is empty.
+- **Fading messages**: messages fade slightly in their last five minutes before they disappear.
+- Keyboard: <kbd>/</kbd> focuses the message box, <kbd>Esc</kbd> closes search and the emoji picker.
+
+Presence and typing use the existing Realtime presence permission, so none of these features need database changes.
+
 ---
 
 ## Contents
@@ -33,7 +47,8 @@ Browser tab                                   Supabase
    session kept in sessionStorage                (optional Turnstile check)
 
 2. subscribe to private channel "room:global" ► Realtime (RLS on realtime.messages:
-   track presence (random key)                    receive + presence only)
+   track presence (random key,                    receive + presence only)
+   guest name + typing flag)
 
 3. select latest 100 messages ──────────────► Postgres: RLS returns only
                                                   unexpired rows, public columns
@@ -60,8 +75,9 @@ Design decisions worth knowing:
 | File | Purpose |
 |---|---|
 | `index.html` | Page structure, dialogs, message template |
-| `styles.css` | All styling (dark theme, responsive, reduced motion) |
-| `app.js` | Auth, realtime, presence, messaging, expiry, reporting |
+| `styles.css` | All styling (light/dark themes, accents, responsive, reduced motion) |
+| `theme.js` | Applies the saved theme before first paint; stores appearance and alert preferences |
+| `app.js` | Auth, realtime, presence, typing, messaging, mentions, search, expiry, reporting |
 | `config.js` | **Your** Supabase URL and public key (placeholders until you edit it) |
 | `schema.sql` | Complete database migration (run once) |
 | `favicon.svg`, `fonts/` | Brand mark and self-hosted fonts (OFL licensed) |
@@ -295,7 +311,7 @@ Nothing here has been deployed or connected to a live Supabase project yet. You 
 
 ## Privacy notes and limits
 
-- Other visitors see only random names, message text, and times. IP addresses, emails, and internal IDs are never shown, and `user_id` isn't readable through the API.
+- Other visitors see only random names, message text, and times, plus each open tab's random name in the online list and a typing hint while someone writes. IP addresses, emails, and internal IDs are never shown, and `user_id` isn't readable through the API.
 - GlobalChat isn't fully anonymous. Supabase and your host process IP addresses and request logs to operate and secure the service.
 - Expiry hides messages after one hour and cleanup deletes them within about five minutes after that. It does **not** guarantee removal from database backups, provider logs, or screenshots and copies other people made.
 - Reported messages are copied into `reports` as evidence and kept until a moderator deletes the report.

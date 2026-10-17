@@ -1,17 +1,19 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark" data-accent="violet" data-density="comfortable">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <title>GlobalChat — One world. One chat.</title>
   <meta name="description" content="One public chatroom for everyone online. No sign-up. Messages disappear after an hour.">
-  <meta name="theme-color" content="#0C0A14">
-  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0A0B12">
+  <meta name="color-scheme" content="dark light">
   <meta name="referrer" content="no-referrer">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="preload" href="fonts/atkinson-hyperlegible-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="fonts/bricolage-grotesque-latin-800-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="styles.css">
+  <!-- Applies the saved theme before first paint (classic script on purpose). -->
+  <script src="theme.js"></script>
   <script type="module" src="app.js"></script>
 </head>
 <body>
@@ -20,7 +22,7 @@
   <div class="app" id="app" data-connection="connecting">
 
     <!-- Sidebar (desktop/tablet). On phones its key info moves into the header
-         and the "About" dialog. -->
+         and the "People" / "About" dialogs. -->
     <aside class="side" aria-label="About this room">
       <div class="brand">
         <svg class="brand-mark" id="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
@@ -34,7 +36,7 @@
         </div>
       </div>
 
-      <section class="side-block identity" aria-label="Your guest identity">
+      <section class="card identity" aria-label="Your guest identity">
         <p class="side-heading">You're chatting as</p>
         <div class="identity-row">
           <span class="avatar avatar-lg" id="side-avatar" aria-hidden="true">?</span>
@@ -43,22 +45,32 @@
         <p class="side-note">A random name for this tab only. Close the tab and it's gone.</p>
       </section>
 
-      <section class="side-block" aria-label="Room">
+      <section class="card people" aria-labelledby="people-heading">
+        <div class="people-head">
+          <p class="side-heading" id="people-heading">Online now</p>
+          <span class="count-badge" id="side-online-count">–</span>
+        </div>
         <p class="presence-line"><span class="presence-dot" aria-hidden="true"></span><span id="side-online">Counting people online…</span></p>
-        <p class="side-note">Everyone who opens GlobalChat lands in this same room. Messages disappear after an hour.</p>
+        <ul class="people-list" id="side-people" aria-label="People online"></ul>
       </section>
 
-      <section class="side-block" aria-label="Room rules">
-        <p class="side-heading">Keep it good</p>
+      <details class="card rules-card">
+        <summary class="side-heading">Keep it good</summary>
         <ul class="rules">
           <li>Be kind. Disagree without attacking people.</li>
           <li>Don't post anyone's personal information, including your own.</li>
           <li>No spam, scams, threats, or anything illegal.</li>
           <li>See something bad? Use Report on the message.</li>
         </ul>
-      </section>
+      </details>
 
-      <button type="button" class="link-button side-about" data-open-about>Privacy and how it works</button>
+      <div class="side-actions">
+        <button type="button" class="button button-quiet button-sm" data-open-settings>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+          Appearance &amp; alerts
+        </button>
+        <button type="button" class="link-button" data-open-about>Privacy and how it works</button>
+      </div>
     </aside>
 
     <main class="chat" aria-label="Global chat room">
@@ -69,20 +81,38 @@
             <ellipse class="brand-orbit" cx="32" cy="32" rx="24" ry="8.5" transform="rotate(-24 32 32)"/>
             <circle class="brand-moon" cx="52.5" cy="22.5" r="4"/>
           </svg>
-          <h1 class="chat-title">Global room</h1>
+          <div class="chat-title-wrap">
+            <h1 class="chat-title">Global room</h1>
+            <span class="status" id="status" role="status">
+              <span class="status-dot" aria-hidden="true"></span><span id="status-text">Connecting</span>
+            </span>
+          </div>
         </div>
         <div class="chat-head-meta">
-          <span class="status" id="status" role="status">
-            <span class="status-dot" aria-hidden="true"></span><span id="status-text">Connecting</span>
-          </span>
-          <span class="online-pill" id="online-pill" title="People online right now">
-            <span class="presence-dot" aria-hidden="true"></span><span id="online-count">–</span><span class="visually-hidden"> online</span>
-          </span>
-          <button type="button" class="icon-button" data-open-about aria-label="Privacy and how GlobalChat works">
+          <button type="button" class="online-pill" id="online-pill" title="People online right now" data-open-people>
+            <span class="presence-dot" aria-hidden="true"></span><span id="online-count">–</span><span class="visually-hidden"> online. Show who's here.</span>
+          </button>
+          <button type="button" class="icon-button" id="search-toggle" aria-label="Search messages" aria-expanded="false" aria-controls="search-bar">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          </button>
+          <button type="button" class="icon-button" data-open-settings aria-label="Appearance and alerts">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18c1 0 1.6-.8 1.6-1.6 0-.5-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.9.7-1.6 1.6-1.6H16a5 5 0 0 0 5-5c0-4.2-4-7.6-9-7.6z"/><circle cx="7.5" cy="11" r="1.2"/><circle cx="11" cy="7.2" r="1.2"/><circle cx="15.5" cy="8.5" r="1.2"/></svg>
+          </button>
+          <button type="button" class="icon-button icon-button-mobile" data-open-about aria-label="Privacy and how GlobalChat works">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
           </button>
         </div>
       </header>
+
+      <div class="search-bar" id="search-bar" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <label class="visually-hidden" for="search-input">Search messages</label>
+        <input type="search" id="search-input" class="search-input" placeholder="Search messages or names…" autocomplete="off" enterkeyhint="search">
+        <span class="search-count" id="search-count" aria-live="polite"></span>
+        <button type="button" class="icon-button icon-button-sm" id="search-close" aria-label="Close search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
 
       <div class="conn-banner" id="conn-banner" hidden></div>
 
@@ -98,6 +128,7 @@
       </div>
 
       <div class="notice" id="privacy-notice" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/></svg>
         <p>Messages here are public and disappear after an hour. Don't share personal details. <button type="button" class="link-button" data-open-about>How privacy works</button></p>
         <button type="button" class="icon-button icon-button-sm" id="dismiss-notice" aria-label="Dismiss privacy notice">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
@@ -105,8 +136,15 @@
       </div>
 
       <form class="composer" id="composer" autocomplete="off" novalidate>
+        <p class="typing" id="typing" aria-live="polite"></p>
         <label class="visually-hidden" for="composer-input">Message everyone</label>
         <div class="composer-box">
+          <div class="emoji-wrap">
+            <button type="button" class="composer-tool" id="emoji-toggle" aria-label="Insert emoji" aria-expanded="false" aria-controls="emoji-panel">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01"/></svg>
+            </button>
+            <div class="emoji-panel" id="emoji-panel" role="group" aria-label="Emoji" hidden></div>
+          </div>
           <textarea id="composer-input" class="composer-input" rows="1"
             placeholder="Message everyone…" enterkeyhint="send"
             aria-describedby="composer-hint composer-error" disabled></textarea>
@@ -117,7 +155,7 @@
         <div class="composer-meta">
           <p class="composer-hint" id="composer-hint">
             Posting as <strong id="composer-username">…</strong>
-            <span class="kbd-hint">Enter sends. Shift+Enter adds a line.</span>
+            <span class="kbd-hint"><kbd>Enter</kbd> sends · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line · <kbd>/</kbd> to type</span>
           </p>
           <span class="counter" id="counter" aria-live="polite">0 / 500</span>
         </div>
@@ -166,6 +204,65 @@
     </form>
   </dialog>
 
+  <!-- Settings dialog -->
+  <dialog class="dialog" id="settings-dialog" aria-labelledby="settings-title">
+    <form class="dialog-body" id="settings-form" method="dialog">
+      <h2 class="dialog-title" id="settings-title">Appearance &amp; alerts</h2>
+      <p class="dialog-sub">Saved on this device only.</p>
+
+      <fieldset class="setting">
+        <legend>Theme</legend>
+        <div class="segmented">
+          <label><input type="radio" name="theme" value="system"><span>System</span></label>
+          <label><input type="radio" name="theme" value="light"><span>Light</span></label>
+          <label><input type="radio" name="theme" value="dark"><span>Dark</span></label>
+        </div>
+      </fieldset>
+
+      <fieldset class="setting">
+        <legend>Accent colour</legend>
+        <div class="swatches">
+          <label class="swatch" data-swatch="violet"><input type="radio" name="accent" value="violet"><span class="visually-hidden">Violet</span></label>
+          <label class="swatch" data-swatch="ocean"><input type="radio" name="accent" value="ocean"><span class="visually-hidden">Ocean</span></label>
+          <label class="swatch" data-swatch="sunset"><input type="radio" name="accent" value="sunset"><span class="visually-hidden">Sunset</span></label>
+          <label class="swatch" data-swatch="mint"><input type="radio" name="accent" value="mint"><span class="visually-hidden">Mint</span></label>
+          <label class="swatch" data-swatch="rose"><input type="radio" name="accent" value="rose"><span class="visually-hidden">Rose</span></label>
+        </div>
+      </fieldset>
+
+      <fieldset class="setting">
+        <legend>Message density</legend>
+        <div class="segmented">
+          <label><input type="radio" name="density" value="comfortable"><span>Comfortable</span></label>
+          <label><input type="radio" name="density" value="compact"><span>Compact</span></label>
+        </div>
+      </fieldset>
+
+      <fieldset class="setting">
+        <legend>When someone @mentions you</legend>
+        <label class="toggle"><input type="checkbox" name="sound"><span class="toggle-track" aria-hidden="true"></span> Play a sound</label>
+        <label class="toggle"><input type="checkbox" name="notify"><span class="toggle-track" aria-hidden="true"></span> Show a desktop notification while this tab is in the background</label>
+        <p class="setting-note" id="notify-note" hidden></p>
+      </fieldset>
+
+      <div class="dialog-actions">
+        <button type="submit" class="button button-primary">Done</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- People dialog (phones; desktop shows the list in the sidebar) -->
+  <dialog class="dialog" id="people-dialog" aria-labelledby="people-dialog-title">
+    <div class="dialog-body">
+      <h2 class="dialog-title" id="people-dialog-title">Online now</h2>
+      <p class="dialog-sub" id="people-dialog-sub">Counting people online…</p>
+      <ul class="people-list people-list-dialog" id="dialog-people" aria-label="People online"></ul>
+      <div class="dialog-actions">
+        <button type="button" class="button button-primary" data-close-dialog>Close</button>
+      </div>
+    </div>
+  </dialog>
+
   <!-- About / privacy dialog -->
   <dialog class="dialog" id="about-dialog" aria-labelledby="about-title">
     <div class="dialog-body prose">
@@ -176,16 +273,19 @@
       <p>When you open the page you get a random name like <em>QuietFox_1937</em> and a temporary guest session that lasts for this browser tab. A new tab means a new name. Names are random labels, not proof of who anyone is.</p>
 
       <h3>Messages disappear</h3>
-      <p>Every message is hidden one hour after it's sent and deleted from the database shortly after. Anyone in the room may have read, copied, or screenshotted it in the meantime, and copies can remain for a limited time in our service providers' backups and logs.</p>
+      <p>Every message is hidden one hour after it's sent and deleted from the database shortly after. Messages fade slightly in their last few minutes. Anyone in the room may have read, copied, or screenshotted it in the meantime, and copies can remain for a limited time in our service providers' backups and logs.</p>
 
       <h3>What other people see</h3>
-      <p>Other visitors see only your random name, your messages, and when you sent them. They never see your IP address, location, or device.</p>
+      <p>Other visitors see your random name in the "Online now" list while your tab is open, a "typing…" hint while you write, your messages, and when you sent them. They never see your IP address, location, or device.</p>
 
       <h3>What we and our providers process</h3>
       <p>GlobalChat isn't fully anonymous. To run and protect the service, our hosting and database providers process technical data such as IP addresses, request logs, and an anonymous session ID. This is used for security, rate limiting, and abuse prevention, not to show your identity to others.</p>
 
       <h3>Reports</h3>
       <p>When you report a message, a copy of it is kept for moderators even after it disappears from the room, so they can review it. Reports are visible only to moderators.</p>
+
+      <h3>Your settings</h3>
+      <p>Theme, colour and alert choices are stored only in this browser.</p>
 
       <div class="dialog-actions">
         <button type="button" class="button button-primary" data-close-dialog>Got it</button>
@@ -195,19 +295,28 @@
 
   <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
 
-  <!-- One chat message. Filled in with textContent only — never innerHTML. -->
+  <!-- One chat message. Filled in with textContent / text nodes only — never innerHTML. -->
   <template id="message-template">
     <li class="msg">
       <span class="avatar" aria-hidden="true"></span>
       <div class="msg-main">
         <div class="msg-head">
-          <span class="msg-name"></span>
+          <button type="button" class="msg-name"></button>
           <span class="msg-you" hidden>you</span>
           <time class="msg-time"></time>
         </div>
-        <p class="msg-text"></p>
+        <div class="msg-bubble">
+          <p class="msg-text"></p>
+        </div>
       </div>
-      <button type="button" class="msg-report" hidden>Report</button>
+      <div class="msg-actions">
+        <button type="button" class="msg-action msg-copy" aria-label="Copy message" title="Copy">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
+        </button>
+        <button type="button" class="msg-action msg-report" title="Report" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>
+        </button>
+      </div>
     </li>
   </template>
 
