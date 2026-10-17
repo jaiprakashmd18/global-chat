@@ -1,0 +1,20 @@
+# Dependencies / tooling
+node_modules/
+.vercel/
+.wrangler/
+supabase/.temp/
+supabase/.branches/
+
+# Secrets — never commit these. (config.js is intentionally committed: it
+# only holds the PUBLIC Supabase URL + anon/publishable key.)
+.env
+.env.*
+*.pem
+service-role*.txt
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
