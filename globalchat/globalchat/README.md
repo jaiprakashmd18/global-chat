@@ -42,6 +42,7 @@ It's a static frontend (HTML, CSS, vanilla JS modules) on top of Supabase: anony
 - **Chat commands**: `/roll`, `/roll 20`, `/flip`, `/8ball question`. The database picks the result and marks it, so nobody can fake a roll.
 - **Word filter**: common swear words are masked (`f***`) in messages, poll options and nicknames. Moderators can edit the list.
 - **Auto-hide**: a message reported by 3 different people is hidden until a moderator checks it.
+- **New-user cooldown (anti-spam)**: for the first 2 minutes of a guest session, the database refuses links (including bare domains like `site.xyz`), photos and voice notes. Plain messages work right away. Spam bots post immediately after signing in, so this blocks most of them; real people barely notice. Change it with `new_user_seconds` in `gc_setting()`.
 - **Admin page** (`admin.html`): reports, live messages (including hidden ones), pin, hide/unhide, delete, ban, slow mode, word filter and bans, all from a web page instead of SQL. See MODERATION.md.
 - **Room stats** in the sidebar: messages and people today, this week, and the busiest hour in your time zone.
 - **Word of the day** from languages around the world.

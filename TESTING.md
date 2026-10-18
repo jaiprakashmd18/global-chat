@@ -197,6 +197,7 @@ After re-running `schema.sql` (and `check-setup.sql` shows all OK):
 - [ ] **Flags:** choose a country in settings: your flag shows on new messages, in the online list and in "Where people are".
 - [ ] **Stickers / voice:** + → Sticker sends a sticker. + → Voice note asks for the microphone, records up to 30 s, and plays for others.
 - [ ] **Commands:** `/roll`, `/roll 20`, `/flip`, `/8ball Will it rain?` come back with a "/roll" (etc.) badge. Typing "🎲 rolled 6" by hand gets no badge.
+- [ ] **New-user cooldown:** in a fresh private window, post `https://example.com` within 2 minutes: refused with a countdown ("New here?…"), text kept. A plain "hi" works. Attaching a photo shows the same notice without uploading. After 2 minutes the link sends.
 - [ ] **Word filter:** a message with a listed word arrives masked (`f***`).
 - [ ] **Auto-hide:** three different guests report one message → it disappears for guests and appears as HIDDEN on the admin page.
 - [ ] **Admin page:** sign in at `/admin.html` with a moderator account; pin a message (📌 bar appears for everyone), turn on slow mode (🐢 banner, second message is refused), unhide, delete, ban, add/remove a filter word.
