@@ -4,9 +4,9 @@
 
 A moderator is a **real, non-anonymous Supabase user** whose id is in `public.moderators`. The check is `public.is_moderator()` in the database; nothing in the frontend can grant moderator access, and an anonymous guest is never a moderator even if their id is added to the table.
 
-This project doesn't ship a moderator dashboard. Day-to-day moderation happens in the Supabase **SQL Editor**, which runs as the database owner and only people with access to your Supabase project can use. The RLS policies for moderators (read/resolve reports, delete messages, manage bans) are already in place, so a separate authenticated moderator app can be built later without changing the schema.
+Moderators use the **admin page**, `/admin.html` on your site. It shows open reports (grouped by message), live messages including ones auto-hidden after reports, and lets you pin, hide/unhide, delete, ban (1 hour, 24 hours or permanently), set slow mode, and edit the word filter. Every action is checked again by the database (`is_moderator()`, RLS and the `gc_mod_*` functions), so the page itself grants nothing. The SQL below still works in the Supabase **SQL Editor** for anything the page doesn't cover.
 
-### Add a moderator (for a future moderator app)
+### Add a moderator (for the admin page)
 
 1. Dashboard → **Authentication → Users → Add user** → create the person with email and password (or invite them).
 2. In SQL Editor:
@@ -117,3 +117,12 @@ order by created_at;
 - **Self-deletion.** Guests can delete their own messages before they expire. A report that was already filed keeps its evidence snapshot, so deleting doesn't help someone escape a report.
 - **Who reacted or voted** is in `public.reactions` / `public.poll_votes` (with `user_id`), readable only from the SQL Editor. Use it to spot vote-stuffing, e.g. many sessions created at once voting the same way.
 - **Limits** for reactions/votes (30 per minute) and image uploads (10 per 10 minutes) are in `gc_setting()` at the top of `schema.sql`.
+
+## Admin page tips
+
+- **Auto-hidden messages** (3+ different reporters) appear on the admin page with an orange border and "HIDDEN after reports". **Unhide** puts them back for everyone; **Delete** removes them.
+- **Ban from a report** uses the reported guest's session id from the report, so it works even after the message is deleted. **Ban** on a live message works through `gc_mod_ban_author()`.
+- **Slow mode** limits every guest to one message per N seconds (up to 5 minutes). The page shows a 🐢 banner while it's on.
+- **Pin** shows a message at the top of the room until it expires (one hour after it was sent) or you unpin it.
+- **Word filter** changes apply to new messages only.
+- The **room bot** posts as "GlobalChat Bot" (`is_bot = true`). Change trivia and daily questions with SQL: `insert into public.trivia_questions (question, answers) values ('…?', array['answer', 'alternative']);` and `insert into public.daily_questions (question) values ('…');`. Stop the bot with `select cron.unschedule('globalchat-trivia');` / `select cron.unschedule('globalchat-daily-question');`.

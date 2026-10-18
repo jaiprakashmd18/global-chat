@@ -15,7 +15,11 @@
 --   4. Realtime: database → "room:global" private broadcast channel
 --   5. Interactive features: replies, image messages (Supabase Storage),
 --      polls, emoji reactions, deleting your own message
---   6. Scheduled cleanup with pg_cron (every 5 minutes)
+--   6. Community features: room bot (trivia, question of the day), dice /
+--      coin / 8-ball commands, editing, renaming, stickers, voice notes,
+--      country flags, word filter, slow mode, pinned message, auto-hide
+--      after reports, room stats, moderator functions for admin.html
+--   7. Scheduled cleanup with pg_cron (every 5 minutes)
 --
 -- Upgrading an existing project: just run the whole file again. New columns
 -- and tables are added in place; existing messages are kept.
@@ -54,6 +58,13 @@ as $$
     when 'upload_window_minutes'   then 10    -- ... per rolling window
     when 'max_poll_question'       then 200
     when 'max_poll_option'         then 80
+    when 'edit_window_seconds'     then 120   -- edit your message within 2 minutes
+    when 'rename_cooldown_seconds' then 30    -- change your nickname at most this often
+    when 'auto_hide_reports'       then 3     -- distinct open reports that hide a message
+    when 'max_slow_mode_seconds'   then 300
+    when 'trivia_every_minutes'    then 15    -- new trivia question at most this often ...
+    when 'trivia_answer_minutes'   then 5     -- ... and this long to answer it
+    when 'trivia_quiet_minutes'    then 30    -- skip trivia if nobody posted for this long
   end;
 $$;
 
@@ -94,6 +105,30 @@ alter table public.messages add column if not exists reply_to uuid
 alter table public.messages add column if not exists image_path text;
 alter table public.messages add column if not exists poll_options text[];
 
+-- Community-feature columns (see section 10).
+--   is_bot      posted by the room bot (trivia, question of the day); guests
+--               can't set it: it isn't in their INSERT grant
+--   command     set by the server for /roll, /flip, /8ball results so they
+--               can't be faked by typing the same text
+--   sticker     sticker id for kind = 'sticker'
+--   country     optional ISO country code the guest chose to show
+--   edited_at   when the author last edited the text
+--   hidden      hidden after enough reports, until a moderator decides
+alter table public.messages add column if not exists is_bot boolean not null default false;
+alter table public.messages add column if not exists command text;
+alter table public.messages add column if not exists sticker text;
+alter table public.messages add column if not exists country text;
+alter table public.messages add column if not exists edited_at timestamptz;
+alter table public.messages add column if not exists hidden boolean not null default false;
+-- Bot messages have no guest behind them.
+alter table public.messages alter column user_id drop not null;
+alter table public.messages drop constraint if exists messages_author_present;
+alter table public.messages add constraint messages_author_present
+  check (is_bot or user_id is not null);
+alter table public.messages drop constraint if exists messages_country_format;
+alter table public.messages add constraint messages_country_format
+  check (country is null or country ~ '^[A-Z]{2}$');
+
 -- Image messages may have an empty caption, so the length rule is "at most
 -- 500"; the trigger requires text for text messages and poll questions.
 alter table public.messages drop constraint if exists messages_content_length;
@@ -101,7 +136,7 @@ alter table public.messages add constraint messages_content_length
   check (char_length(content) <= 500);
 alter table public.messages drop constraint if exists messages_kind_valid;
 alter table public.messages add constraint messages_kind_valid
-  check (kind in ('text', 'image', 'poll'));
+  check (kind in ('text', 'image', 'poll', 'sticker', 'voice'));
 
 -- History query: newest unexpired messages first.
 create index if not exists messages_created_at_idx
@@ -230,6 +265,145 @@ create index if not exists rate_events_user_action_idx
   on public.rate_events (user_id, action, created_at desc);
 
 
+-- Room-wide state set by moderators: pinned message and slow mode.
+-- Exactly one row. Read through gc_room_state(); changed through gc_mod_*.
+create table if not exists public.room_state (
+  id                smallint primary key default 1 check (id = 1),
+  pinned_message_id uuid references public.messages (id) on delete set null,
+  slow_mode_seconds integer not null default 0 check (slow_mode_seconds between 0 and 3600),
+  updated_at        timestamptz not null default now()
+);
+insert into public.room_state (id) values (1) on conflict (id) do nothing;
+
+
+-- Word filter. Matching whole words (any case) are masked as f*** in
+-- messages, poll options and nicknames. Moderators can edit the list on the
+-- admin page; add more with: insert into public.blocked_words values ('word');
+create table if not exists public.blocked_words (
+  word       text primary key check (word ~ '^[a-z]{2,30}$'),
+  created_at timestamptz not null default now()
+);
+insert into public.blocked_words (word) values
+  ('fuck'), ('fucking'), ('fucker'), ('motherfucker'), ('shit'), ('bitch'),
+  ('asshole'), ('cunt'), ('dick'), ('bastard'), ('whore'), ('slut')
+on conflict (word) do nothing;
+
+
+-- Room statistics. Messages are deleted after an hour, so counts are kept
+-- here: messages per UTC hour, and which guests posted on each day (only to
+-- count distinct people; pruned after two days).
+create table if not exists public.stats_hourly (
+  day      date     not null,
+  hour     smallint not null check (hour between 0 and 23),
+  messages integer  not null default 0,
+  primary key (day, hour)
+);
+create table if not exists public.stats_posters (
+  day     date not null,
+  user_id uuid not null,
+  primary key (day, user_id)
+);
+
+
+-- Room bot content: trivia questions (answers compared loosely: case,
+-- punctuation and a leading "the"/"a" are ignored) and questions of the day.
+create table if not exists public.trivia_questions (
+  id       serial primary key,
+  question text not null unique,
+  answers  text[] not null check (cardinality(answers) >= 1)
+);
+create table if not exists public.trivia_rounds (
+  id          bigserial primary key,
+  question_id integer not null references public.trivia_questions (id) on delete cascade,
+  asked_at    timestamptz not null default now(),
+  ends_at     timestamptz not null,
+  solved_by   text,
+  closed_at   timestamptz
+);
+create index if not exists trivia_rounds_asked_idx on public.trivia_rounds (asked_at desc);
+
+create table if not exists public.daily_questions (
+  id       serial primary key,
+  question text not null unique
+);
+
+insert into public.trivia_questions (question, answers) values
+  ('What is the largest planet in our solar system?', array['jupiter']),
+  ('What is the capital of Japan?', array['tokyo']),
+  ('How many continents are there?', array['7', 'seven']),
+  ('Which ocean is the largest?', array['pacific', 'pacific ocean']),
+  ('What is the chemical symbol for gold?', array['au']),
+  ('Which planet is known as the Red Planet?', array['mars']),
+  ('What is the tallest mountain on Earth?', array['everest', 'mount everest', 'mt everest']),
+  ('How many legs does a spider have?', array['8', 'eight']),
+  ('What is the smallest prime number?', array['2', 'two']),
+  ('Which country has the most people?', array['india']),
+  ('What is the longest river in Africa?', array['nile', 'river nile']),
+  ('What gas do plants take in from the air?', array['carbon dioxide', 'co2']),
+  ('What is the capital of Australia?', array['canberra']),
+  ('How many minutes are in a day?', array['1440']),
+  ('Which language has the most native speakers?', array['mandarin', 'mandarin chinese', 'chinese']),
+  ('What is the hardest natural substance?', array['diamond']),
+  ('Which country is home to the kangaroo?', array['australia']),
+  ('What is the freezing point of water in Fahrenheit?', array['32', '32f']),
+  ('Who painted the Mona Lisa?', array['leonardo da vinci', 'da vinci', 'leonardo']),
+  ('What is the largest desert in the world?', array['antarctica', 'antarctic']),
+  ('How many players are on a football (soccer) team on the field?', array['11', 'eleven']),
+  ('What is the currency of Japan?', array['yen', 'japanese yen']),
+  ('Which element has the symbol O?', array['oxygen']),
+  ('What is the capital of Canada?', array['ottawa']),
+  ('How many sides does a hexagon have?', array['6', 'six']),
+  ('Which planet has the most famous rings?', array['saturn']),
+  ('What is the fastest land animal?', array['cheetah']),
+  ('In which country are the pyramids of Giza?', array['egypt']),
+  ('What is 12 x 12?', array['144']),
+  ('Which bird is a symbol of peace?', array['dove']),
+  ('What is the largest mammal?', array['blue whale', 'whale']),
+  ('What is the capital of Brazil?', array['brasilia', 'brasília']),
+  ('How many hours are in a week?', array['168']),
+  ('Which instrument has 88 keys?', array['piano']),
+  ('What is the main language of Brazil?', array['portuguese']),
+  ('Which country gifted the Statue of Liberty to the USA?', array['france']),
+  ('What is the boiling point of water in Celsius?', array['100', '100c']),
+  ('How many strings does a standard guitar have?', array['6', 'six']),
+  ('What is the closest star to Earth?', array['sun', 'the sun']),
+  ('Which continent is Kenya in?', array['africa'])
+on conflict (question) do nothing;
+
+insert into public.daily_questions (question) values
+  ('Where in the world are you chatting from today? 🌍'),
+  ('What''s the best thing that happened to you this week?'),
+  ('What song is stuck in your head right now? 🎵'),
+  ('What''s the weather like where you are?'),
+  ('If you could visit any country tomorrow, where would you go?'),
+  ('What''s your favourite food from your country?'),
+  ('What are you learning at the moment?'),
+  ('Tea or coffee? ☕'),
+  ('What''s a movie everyone should watch at least once?'),
+  ('What time is it where you are, and what are you up to?'),
+  ('What''s one word in your language that you love?'),
+  ('Morning person or night owl? 🦉'),
+  ('What''s the last thing that made you laugh?'),
+  ('What''s a small habit that makes your day better?'),
+  ('Which game are you playing these days? 🎮'),
+  ('What''s your dream job?'),
+  ('Cats or dogs? 🐱🐶'),
+  ('What would you do with an extra hour every day?'),
+  ('What''s a festival or holiday from your country we should know about?'),
+  ('Share a fun fact about where you live!'),
+  ('What''s on your playlist this week?'),
+  ('Beach or mountains? 🏖️⛰️'),
+  ('What''s a skill you''d love to master?'),
+  ('What''s the best advice you''ve ever been given?'),
+  ('What''s your comfort food?'),
+  ('Which app do you use the most?'),
+  ('What''s something you''re looking forward to?'),
+  ('If you could talk to anyone in history, who would it be?'),
+  ('What''s your favourite season and why?'),
+  ('Say hello in your language! 👋')
+on conflict (question) do nothing;
+
+
 -- -----------------------------------------------------------------------------
 -- 2. Helper functions
 -- -----------------------------------------------------------------------------
@@ -296,6 +470,123 @@ $$;
 revoke all on function public.gc_rate_check(uuid, text) from public, anon, authenticated;
 
 
+-- Mask blocked words: "fuck" -> "f***" (whole words, any case).
+create or replace function public.gc_mask_words(p_text text)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_text text := p_text;
+  v_word text;
+begin
+  if v_text is null or v_text = '' then
+    return v_text;
+  end if;
+  for v_word in select b.word from public.blocked_words b loop
+    v_text := regexp_replace(
+      v_text,
+      '\m(' || left(v_word, 1) || ')' || substr(v_word, 2) || '\M',
+      '\1' || repeat('*', length(v_word) - 1),
+      'gi');
+  end loop;
+  return v_text;
+end;
+$$;
+
+-- True if a nickname contains a blocked word anywhere (NiceShitFox_1234).
+create or replace function public.gc_name_is_blocked(p_name text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select lower(p_name) like 'globalbot%'
+      or exists (select 1 from public.blocked_words b where strpos(lower(p_name), b.word) > 0);
+$$;
+
+-- Stickers the page ships in /stickers (<id>.svg).
+create or replace function public.gc_sticker_ids()
+returns text[]
+language sql
+immutable
+set search_path = ''
+as $$
+  select array['hi', 'gg', 'lol', 'love', 'gn', 'brb', 'wow', 'thanks'];
+$$;
+
+-- Loose comparison key for trivia answers: case, punctuation, extra spaces
+-- and a leading "the" / "a" / "an" don't matter.
+create or replace function public.gc_answer_key(p_text text)
+returns text
+language sql
+immutable
+set search_path = ''
+as $$
+  select regexp_replace(
+           btrim(regexp_replace(
+             regexp_replace(lower(coalesce(p_text, '')), '[^[:alnum:][:space:]]', '', 'g'),
+             '\s+', ' ', 'g')),
+           '^(the|a|an) ', '');
+$$;
+
+-- Chat commands, run on the server so results can't be faked:
+--   /roll [N|dN]  dice (default 6 sides, 2–1000)
+--   /flip         coin
+--   /8ball [q]    magic 8-ball
+-- Anything else starting with "/" is sent as normal text.
+create or replace function public.gc_run_command(p_text text, out content text, out command text)
+language plpgsql
+volatile
+set search_path = ''
+as $$
+declare
+  v_cmd     text;
+  v_arg     text;
+  v_sides   integer := 6;
+  v_answers text[] := array[
+    'It is certain.', 'Without a doubt.', 'You may rely on it.', 'Yes, definitely.',
+    'As I see it, yes.', 'Most likely.', 'Outlook good.', 'Signs point to yes.',
+    'Reply hazy, try again.', 'Ask again later.', 'Better not tell you now.',
+    'Cannot predict now.', 'Concentrate and ask again.', 'Don''t count on it.',
+    'My reply is no.', 'My sources say no.', 'Outlook not so good.', 'Very doubtful.'];
+begin
+  content := p_text;
+  command := null;
+  v_cmd := lower(substring(p_text from '^/([A-Za-z0-9]+)'));
+  if v_cmd is null then
+    return;
+  end if;
+  v_arg := btrim(coalesce(substring(p_text from '^/[A-Za-z0-9]+\s*(.*)$'), ''));
+
+  if v_cmd = 'roll' then
+    if v_arg ~* '^d?[0-9]{1,4}$' then
+      v_sides := regexp_replace(v_arg, '\D', '', 'g')::integer;
+    end if;
+    if v_sides not between 2 and 1000 then
+      v_sides := 6;
+    end if;
+    content := '🎲 rolled ' || (1 + floor(random() * v_sides))::integer || ' (1–' || v_sides || ')';
+    command := 'roll';
+  elsif v_cmd = 'flip' then
+    content := '🪙 flipped ' || case when random() < 0.5 then 'heads' else 'tails' end;
+    command := 'flip';
+  elsif v_cmd = '8ball' then
+    content := '🎱 ' || case when v_arg <> '' then left(v_arg, 400) || ' → ' else '' end
+               || v_answers[1 + floor(random() * cardinality(v_answers))::integer];
+    command := '8ball';
+  end if;
+end;
+$$;
+
+revoke all on function public.gc_mask_words(text)        from public, anon, authenticated;
+revoke all on function public.gc_name_is_blocked(text)   from public, anon, authenticated;
+revoke all on function public.gc_run_command(text)       from public, anon, authenticated;
+
+
 -- Clean up user text: unify newlines, strip control and bidi-override
 -- characters (used for spoofing), collapse runs of blank lines, trim.
 create or replace function public.gc_normalize_text(input text)
@@ -339,7 +630,27 @@ declare
   v_ban        public.banned_users%rowtype;
   v_options    text[];
   v_option     text;
+  v_slow       integer;
 begin
+  -- 0. Room-bot rows. Only gc_bot_post() can set is_bot (guests have no
+  --    INSERT grant on that column), so these skip the guest rules.
+  if new.is_bot then
+    new.user_id      := null;
+    new.username     := 'GlobalBot_0000';
+    new.created_at   := now();
+    new.expires_at   := now() + interval '1 hour';
+    new.kind         := 'text';
+    new.content      := left(public.gc_normalize_text(new.content), 500);
+    new.image_path   := null;
+    new.poll_options := null;
+    new.sticker      := null;
+    new.country      := null;
+    new.command      := null;
+    new.edited_at    := null;
+    new.hidden       := false;
+    return new;
+  end if;
+
   -- 1. Must be an authenticated guest. Ignore any client-supplied user id.
   if v_uid is null then
     raise exception 'NOT_AUTHENTICATED' using errcode = '42501',
@@ -358,6 +669,15 @@ begin
       hint = 'This guest session has been blocked from posting.';
   end if;
 
+  -- Server-owned fields (also outside the guests' INSERT grant).
+  new.command   := null;
+  new.edited_at := null;
+  new.hidden    := false;
+  new.country   := nullif(upper(btrim(coalesce(new.country, ''))), '');
+  if new.country !~ '^[A-Z]{2}$' then
+    new.country := null;
+  end if;
+
   -- 4. Content: normalise, then validate.
   new.content := public.gc_normalize_text(new.content);
   if char_length(new.content) > public.gc_setting('max_message_length') then
@@ -370,15 +690,20 @@ begin
   if new.kind = 'text' then
     new.image_path := null;
     new.poll_options := null;
+    new.sticker := null;
     if new.content = '' then
       raise exception 'EMPTY_MESSAGE' using errcode = 'P0001',
         hint = 'Messages cannot be empty.';
     end if;
+    -- /roll, /flip, /8ball: the server writes the result.
+    select c.content, c.command into new.content, new.command
+    from public.gc_run_command(new.content) c;
 
   elsif new.kind = 'image' then
     -- Caption is optional. The image must be a file this guest uploaded to
     -- their own folder in the private bucket, named <uuid>.<ext>.
     new.poll_options := null;
+    new.sticker := null;
     if new.image_path is null
        or new.image_path !~ ('^' || v_uid::text
             || '/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpg|webp|gif)$')
@@ -395,6 +720,7 @@ begin
   elsif new.kind = 'poll' then
     -- The question is `content`; 2–4 distinct, non-empty options.
     new.image_path := null;
+    new.sticker := null;
     if new.content = '' or char_length(new.content) > public.gc_setting('max_poll_question') then
       raise exception 'INVALID_POLL' using errcode = 'P0001',
         hint = 'A poll needs a question of up to 200 characters.';
@@ -406,7 +732,7 @@ begin
         raise exception 'INVALID_POLL' using errcode = 'P0001',
           hint = 'Poll options must be 1 to 80 characters.';
       end if;
-      v_options := v_options || v_option;
+      v_options := v_options || public.gc_mask_words(v_option);
     end loop;
     if cardinality(v_options) not between 2 and 4
        or (select count(distinct lower(o)) from unnest(v_options) o) <> cardinality(v_options) then
@@ -415,21 +741,53 @@ begin
     end if;
     new.poll_options := v_options;
 
+  elsif new.kind = 'sticker' then
+    new.image_path := null;
+    new.poll_options := null;
+    new.content := '';
+    if new.sticker is null or not (new.sticker = any (public.gc_sticker_ids())) then
+      raise exception 'INVALID_STICKER' using errcode = 'P0001';
+    end if;
+
+  elsif new.kind = 'voice' then
+    -- A voice note this guest uploaded to their own folder (same bucket and
+    -- rules as images).
+    new.poll_options := null;
+    new.sticker := null;
+    new.content := '';
+    if new.image_path is null
+       or new.image_path !~ ('^' || v_uid::text
+            || '/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(webm|ogg|m4a)$')
+       or not exists (
+            select 1 from storage.objects o
+            where o.bucket_id = 'chat-images'
+              and o.name = new.image_path
+              and o.owner_id = v_uid::text
+          ) then
+      raise exception 'INVALID_VOICE' using errcode = 'P0001',
+        hint = 'Record and upload the voice note first, then send it.';
+    end if;
+
   else
     raise exception 'INVALID_KIND' using errcode = 'P0001';
   end if;
 
+  -- 4b2. Word filter (command results are server text and stay as they are,
+  --      except an 8-ball question, which is masked like any text).
+  new.content := public.gc_mask_words(new.content);
+
   -- 4c. Replies must point at a message that is still visible.
   if new.reply_to is not null and not exists (
     select 1 from public.messages m
-    where m.id = new.reply_to and m.expires_at > now()
+    where m.id = new.reply_to and m.expires_at > now() and not m.hidden
   ) then
     raise exception 'REPLY_NOT_FOUND' using errcode = 'P0001',
       hint = 'The message you replied to has expired or was removed.';
   end if;
 
   -- 5. Username format (also a CHECK constraint, but this gives a clear error).
-  if new.username is null or new.username !~ '^[A-Za-z]{2,20}_[0-9]{4}$' then
+  if new.username is null or new.username !~ '^[A-Za-z]{2,20}_[0-9]{4}$'
+     or public.gc_name_is_blocked(new.username) then
     raise exception 'INVALID_USERNAME' using errcode = 'P0001',
       hint = 'Display names look like Word_1234.';
   end if;
@@ -448,6 +806,16 @@ begin
       hint = 'Too many messages. Wait a few seconds and try again.';
   end if;
 
+  -- 7b. Slow mode (set by moderators): one message per N seconds each.
+  select r.slow_mode_seconds into v_slow from public.room_state r where r.id = 1;
+  if coalesce(v_slow, 0) > 0 and exists (
+    select 1 from public.messages m
+    where m.user_id = v_uid and m.created_at > now() - make_interval(secs => v_slow)
+  ) then
+    raise exception 'SLOW_MODE' using errcode = 'P0001',
+      hint = format('Slow mode is on: one message every %s seconds.', v_slow);
+  end if;
+
   -- 8. Sustained limit: caps long-running spam from a single session.
   select count(*) into v_hourly
   from public.messages m
@@ -459,8 +827,8 @@ begin
   end if;
 
   -- 9. Repeat-spam: same text from the same guest within the window.
-  --    (Image messages with no caption are exempt.)
-  if new.content <> '' and exists (
+  --    (Empty captions, stickers, voice notes and command results are exempt.)
+  if new.content <> '' and new.command is null and exists (
     select 1 from public.messages m
     where m.user_id = v_uid
       and m.created_at > now() - make_interval(secs => public.gc_setting('duplicate_window_seconds'))
@@ -496,9 +864,9 @@ create trigger messages_before_insert
   before insert on public.messages
   for each row execute function public.messages_before_insert();
 
--- Messages are immutable once sent.
--- The one exception: when a message is deleted, replies to it have reply_to
--- cleared by the foreign key (ON DELETE SET NULL), which is an UPDATE.
+-- Messages are immutable once sent, with two exceptions: when a message is
+-- deleted, replies to it have reply_to cleared by the foreign key (ON DELETE
+-- SET NULL); and the trusted functions in section 10 (edit, hide/unhide).
 create or replace function public.messages_block_update()
 returns trigger
 language plpgsql
@@ -507,6 +875,12 @@ as $$
 begin
   if old.reply_to is not null and new.reply_to is null
      and (to_jsonb(new) - 'reply_to') = (to_jsonb(old) - 'reply_to') then
+    return new;
+  end if;
+  -- Edits, hiding and unhiding go through SECURITY DEFINER functions in
+  -- section 10, which set this transaction-local flag first. Guests have no
+  -- UPDATE grant, so they can never reach this trigger themselves.
+  if current_setting('gc.trusted_update', true) = 'on' then
     return new;
   end if;
   raise exception 'MESSAGES_ARE_IMMUTABLE' using errcode = '42501';
@@ -546,7 +920,12 @@ begin
           'kind',         new.kind,
           'reply_to',     new.reply_to,
           'image_path',   new.image_path,
-          'poll_options', new.poll_options
+          'poll_options', new.poll_options,
+          'is_bot',       new.is_bot,
+          'command',      new.command,
+          'sticker',      new.sticker,
+          'country',      new.country,
+          'edited_at',    new.edited_at
         ),
         'message_created',
         'room:global',
@@ -670,13 +1049,24 @@ revoke all on public.moderators   from anon, authenticated;
 revoke all on public.reactions    from anon, authenticated;
 revoke all on public.poll_votes   from anon, authenticated;
 revoke all on public.rate_events  from anon, authenticated;
+revoke all on public.room_state       from anon, authenticated;
+revoke all on public.stats_hourly     from anon, authenticated;
+revoke all on public.stats_posters    from anon, authenticated;
+revoke all on public.trivia_questions from anon, authenticated;
+revoke all on public.trivia_rounds    from anon, authenticated;
+revoke all on public.daily_questions  from anon, authenticated;
+revoke all on public.blocked_words    from anon, authenticated;
+-- Moderators manage the word filter from admin.html (RLS below).
+grant select, insert, delete on public.blocked_words to authenticated;
 
 -- Guests read the public columns only — user_id is never readable via the API.
 grant select (id, username, content, created_at, expires_at,
-              kind, reply_to, image_path, poll_options)
+              kind, reply_to, image_path, poll_options,
+              is_bot, command, sticker, country, edited_at, hidden)
   on public.messages to authenticated;
 -- Guests supply only these; the trigger validates them and sets the rest.
-grant insert (username, content, kind, reply_to, image_path, poll_options)
+grant insert (username, content, kind, reply_to, image_path, poll_options,
+              sticker, country)
   on public.messages to authenticated;
 -- Deletion is granted but RLS limits it to moderators.
 grant delete on public.messages to authenticated;
@@ -704,16 +1094,31 @@ alter table public.moderators   enable row level security;
 alter table public.reactions    enable row level security;
 alter table public.poll_votes   enable row level security;
 alter table public.rate_events  enable row level security;
+alter table public.room_state       enable row level security;
+alter table public.stats_hourly     enable row level security;
+alter table public.stats_posters    enable row level security;
+alter table public.trivia_questions enable row level security;
+alter table public.trivia_rounds    enable row level security;
+alter table public.daily_questions  enable row level security;
+alter table public.blocked_words    enable row level security;
+
+drop policy if exists "blocked words: moderators manage" on public.blocked_words;
+create policy "blocked words: moderators manage"
+  on public.blocked_words for all
+  to authenticated
+  using ((select public.is_moderator()))
+  with check ((select public.is_moderator()));
 
 -- messages ------------------------------------------------------------------
 drop policy if exists "messages: read unexpired"          on public.messages;
 drop policy if exists "messages: guests insert own"       on public.messages;
 drop policy if exists "messages: moderators delete"       on public.messages;
 
+-- Messages hidden after reports stay visible to moderators only.
 create policy "messages: read unexpired"
   on public.messages for select
   to authenticated
-  using (expires_at > now());
+  using (expires_at > now() and (not hidden or (select public.is_moderator())));
 
 create policy "messages: guests insert own"
   on public.messages for insert
@@ -863,7 +1268,8 @@ begin
   if p_emoji is null or p_emoji not in ('❤️', '👍', '😂', '😮', '😢', '🔥') then
     raise exception 'INVALID_REACTION' using errcode = 'P0001';
   end if;
-  if not exists (select 1 from public.messages m where m.id = p_message_id and m.expires_at > now()) then
+  if not exists (select 1 from public.messages m
+                 where m.id = p_message_id and m.expires_at > now() and not m.hidden) then
     raise exception 'MESSAGE_NOT_FOUND' using errcode = 'P0001',
       hint = 'That message has expired or was removed.';
   end if;
@@ -914,7 +1320,7 @@ begin
     raise exception 'BANNED' using errcode = 'P0001';
   end if;
   select * into v_msg from public.messages m
-  where m.id = p_message_id and m.expires_at > now() and m.kind = 'poll';
+  where m.id = p_message_id and m.expires_at > now() and m.kind = 'poll' and not m.hidden;
   if not found then
     raise exception 'MESSAGE_NOT_FOUND' using errcode = 'P0001',
       hint = 'That poll has expired or was removed.';
@@ -1071,7 +1477,7 @@ set search_path = ''
 as $$
   select exists (
     select 1 from public.messages m
-    where m.image_path = p_name and m.expires_at > now()
+    where m.image_path = p_name and m.expires_at > now() and not m.hidden
   );
 $$;
 
@@ -1118,7 +1524,8 @@ do $do$
 begin
   insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
   values ('chat-images', 'chat-images', false, 5242880,
-          array['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+          array['image/png', 'image/jpeg', 'image/webp', 'image/gif',
+                'audio/webm', 'audio/ogg', 'audio/mp4'])
   on conflict (id) do update
     set public = false,
         file_size_limit = excluded.file_size_limit,
@@ -1134,7 +1541,7 @@ begin
     with check (
       bucket_id = 'chat-images'
       and (storage.foldername(name))[1] = (select auth.uid())::text
-      and name ~ '^[0-9a-f-]{36}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpg|webp|gif)$'
+      and name ~ '^[0-9a-f-]{36}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpg|webp|gif|webm|ogg|m4a)$'
       and (select public.gc_upload_allowed())
     );
 
@@ -1157,7 +1564,497 @@ $do$;
 
 
 -- -----------------------------------------------------------------------------
--- 10. Scheduled cleanup (pg_cron)
+-- 10. Community features
+-- -----------------------------------------------------------------------------
+
+-- Post a message as the room bot. Owner-only: used by triggers and cron.
+create or replace function public.gc_bot_post(p_content text, p_reply_to uuid default null)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_id uuid;
+begin
+  insert into public.messages (username, content, is_bot, reply_to)
+  values ('GlobalBot_0000', p_content, true, p_reply_to)
+  returning id into v_id;
+  return v_id;
+end;
+$$;
+
+-- Today's question of the day (UTC day), rotating through the list.
+create or replace function public.gc_daily_question_text()
+returns text
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select q.question
+  from public.daily_questions q
+  order by q.id
+  offset (select (extract(doy from (now() at time zone 'utc'))::integer)
+                 % greatest(1, (select count(*) from public.daily_questions)::integer))
+  limit 1;
+$$;
+
+-- Cron: post the question of the day.
+create or replace function public.gc_post_daily_question()
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_q text := public.gc_daily_question_text();
+begin
+  if v_q is not null then
+    perform public.gc_bot_post('☀️ Question of the day: ' || v_q);
+  end if;
+end;
+$$;
+
+-- Cron (every 5 min): close expired trivia rounds and ask a new question at
+-- most every `trivia_every_minutes`, only while people are actually posting.
+create or replace function public.gc_trivia_tick()
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_round  public.trivia_rounds%rowtype;
+  v_q      public.trivia_questions%rowtype;
+  v_answer text;
+begin
+  perform pg_advisory_xact_lock(hashtextextended('gc_trivia', 0));
+
+  for v_round in
+    select * from public.trivia_rounds r
+    where r.closed_at is null and r.ends_at <= now()
+  loop
+    select q.answers[1] into v_answer from public.trivia_questions q where q.id = v_round.question_id;
+    update public.trivia_rounds set closed_at = now() where id = v_round.id;
+    perform public.gc_bot_post('⏰ Time''s up! The answer was: ' || initcap(v_answer));
+  end loop;
+
+  if exists (select 1 from public.trivia_rounds r where r.closed_at is null) then
+    return;
+  end if;
+  if exists (select 1 from public.trivia_rounds r
+             where r.asked_at > now() - make_interval(mins => public.gc_setting('trivia_every_minutes') - 1)) then
+    return;
+  end if;
+  if not exists (select 1 from public.messages m
+                 where not m.is_bot
+                   and m.created_at > now() - make_interval(mins => public.gc_setting('trivia_quiet_minutes'))) then
+    return;   -- nobody around: don't talk to an empty room
+  end if;
+
+  select * into v_q from public.trivia_questions q
+  where not exists (select 1 from public.trivia_rounds r
+                    where r.question_id = q.id and r.asked_at > now() - interval '1 day')
+  order by random() limit 1;
+  if not found then
+    select * into v_q from public.trivia_questions q order by random() limit 1;
+  end if;
+  if not found then
+    return;
+  end if;
+
+  insert into public.trivia_rounds (question_id, ends_at)
+  values (v_q.id, now() + make_interval(mins => public.gc_setting('trivia_answer_minutes')));
+  perform public.gc_bot_post('🧠 Trivia time! ' || v_q.question
+    || ' First correct answer in the next ' || public.gc_setting('trivia_answer_minutes') || ' minutes wins.');
+end;
+$$;
+
+-- After each guest message: room stats, and trivia answer checking.
+create or replace function public.messages_after_insert_community()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_day    date := (new.created_at at time zone 'utc')::date;
+  v_round  public.trivia_rounds%rowtype;
+  v_q      public.trivia_questions%rowtype;
+  v_key    text;
+begin
+  if new.is_bot then
+    return null;
+  end if;
+
+  insert into public.stats_hourly (day, hour, messages)
+  values (v_day, extract(hour from (new.created_at at time zone 'utc'))::smallint, 1)
+  on conflict (day, hour) do update set messages = public.stats_hourly.messages + 1;
+  insert into public.stats_posters (day, user_id) values (v_day, new.user_id)
+  on conflict do nothing;
+
+  if new.kind = 'text' and new.command is null then
+    select * into v_round from public.trivia_rounds r
+    where r.closed_at is null and r.ends_at > now()
+    order by r.asked_at desc limit 1
+    for update skip locked;
+    if found then
+      select * into v_q from public.trivia_questions q where q.id = v_round.question_id;
+      v_key := public.gc_answer_key(new.content);
+      if exists (select 1 from unnest(v_q.answers) a where public.gc_answer_key(a) = v_key) then
+        update public.trivia_rounds
+          set solved_by = new.username, closed_at = now()
+          where id = v_round.id;
+        perform public.gc_bot_post('🎉 ' || new.username || ' got it! The answer was: '
+                                   || initcap(v_q.answers[1]), new.id);
+      end if;
+    end if;
+  end if;
+  return null;
+exception when others then
+  -- Stats and trivia must never block a chat message.
+  raise warning 'GlobalChat community trigger failed: %', sqlerrm;
+  return null;
+end;
+$$;
+
+drop trigger if exists messages_after_insert_community on public.messages;
+create trigger messages_after_insert_community
+  after insert on public.messages
+  for each row execute function public.messages_after_insert_community();
+
+-- Room stats for the sidebar.
+create or replace function public.gc_room_stats()
+returns jsonb
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  with today as (select (now() at time zone 'utc')::date as d)
+  select jsonb_build_object(
+    'today_messages', coalesce((select sum(h.messages) from public.stats_hourly h, today where h.day = today.d), 0),
+    'today_people',   (select count(*) from public.stats_posters p, today where p.day = today.d),
+    'week_messages',  coalesce((select sum(h.messages) from public.stats_hourly h, today where h.day > today.d - 7), 0),
+    'busiest_hour_utc', (select h.hour from public.stats_hourly h, today
+                         where h.day > today.d - 7
+                         group by h.hour order by sum(h.messages) desc, h.hour limit 1)
+  );
+$$;
+
+-- Everything the page needs about the room besides messages.
+create or replace function public.gc_room_state()
+returns jsonb
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select jsonb_build_object(
+    'slow_mode_seconds', r.slow_mode_seconds,
+    'pinned', (select jsonb_build_object(
+                 'id', m.id, 'username', m.username, 'content', m.content, 'kind', m.kind,
+                 'is_bot', m.is_bot, 'created_at', m.created_at, 'expires_at', m.expires_at)
+               from public.messages m
+               where m.id = r.pinned_message_id and m.expires_at > now() and not m.hidden),
+    'daily_question', public.gc_daily_question_text(),
+    'stats', public.gc_room_stats()
+  )
+  from public.room_state r where r.id = 1;
+$$;
+
+create or replace function public.gc_broadcast_room_state()
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  perform realtime.send(public.gc_room_state(), 'room_state', 'room:global', true);
+exception when others then
+  raise warning 'GlobalChat broadcast failed: %', sqlerrm;
+end;
+$$;
+
+-- Edit your own text message within `edit_window_seconds` of sending it.
+create or replace function public.gc_edit_message(p_message_id uuid, p_content text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid  uuid := auth.uid();
+  v_msg  public.messages%rowtype;
+  v_text text := public.gc_normalize_text(p_content);
+  v_at   timestamptz := now();
+begin
+  if v_uid is null then
+    raise exception 'NOT_AUTHENTICATED' using errcode = '42501';
+  end if;
+  if public.gc_is_banned(v_uid) then
+    raise exception 'BANNED' using errcode = 'P0001';
+  end if;
+  select * into v_msg from public.messages m
+  where m.id = p_message_id and m.user_id = v_uid and m.expires_at > now() and not m.hidden;
+  if not found then
+    raise exception 'MESSAGE_NOT_FOUND' using errcode = 'P0001';
+  end if;
+  if v_msg.kind <> 'text' or v_msg.command is not null then
+    raise exception 'NOT_EDITABLE' using errcode = 'P0001',
+      hint = 'Only text messages can be edited.';
+  end if;
+  if v_msg.created_at < now() - make_interval(secs => public.gc_setting('edit_window_seconds')) then
+    raise exception 'EDIT_WINDOW_PASSED' using errcode = 'P0001',
+      hint = 'Messages can be edited for 2 minutes after sending.';
+  end if;
+  if v_text = '' then
+    raise exception 'EMPTY_MESSAGE' using errcode = 'P0001';
+  end if;
+  if char_length(v_text) > public.gc_setting('max_message_length') then
+    raise exception 'MESSAGE_TOO_LONG' using errcode = 'P0001';
+  end if;
+  perform public.gc_rate_check(v_uid, 'edit');
+  v_text := public.gc_mask_words(v_text);
+
+  perform set_config('gc.trusted_update', 'on', true);
+  update public.messages set content = v_text, edited_at = v_at where id = p_message_id;
+  perform set_config('gc.trusted_update', 'off', true);
+
+  begin
+    perform realtime.send(jsonb_build_object('id', p_message_id, 'content', v_text, 'edited_at', v_at),
+                          'message_edited', 'room:global', true);
+  exception when others then
+    raise warning 'GlobalChat broadcast failed: %', sqlerrm;
+  end;
+  return jsonb_build_object('content', v_text, 'edited_at', v_at);
+end;
+$$;
+
+-- Choose your own nickname (Word_1234 format). Future messages use it;
+-- messages already sent keep the old name.
+create or replace function public.gc_rename(p_username text)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid     uuid := auth.uid();
+  v_current public.guest_names%rowtype;
+begin
+  if v_uid is null then
+    raise exception 'NOT_AUTHENTICATED' using errcode = '42501';
+  end if;
+  if p_username is null or p_username !~ '^[A-Za-z]{2,20}_[0-9]{4}$'
+     or public.gc_name_is_blocked(p_username) then
+    raise exception 'INVALID_USERNAME' using errcode = 'P0001',
+      hint = 'Use 2–20 letters; we add 4 digits.';
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended('gc_msg:' || v_uid::text, 0));
+  select * into v_current from public.guest_names g where g.user_id = v_uid;
+  if found then
+    if v_current.username = p_username then
+      return p_username;
+    end if;
+  end if;
+  -- Cooldown counts renames only (claiming a name by posting doesn't).
+  if exists (select 1 from public.rate_events e
+             where e.user_id = v_uid and e.action = 'rename'
+               and e.created_at > now() - make_interval(secs => public.gc_setting('rename_cooldown_seconds'))) then
+    raise exception 'RATE_LIMITED' using errcode = 'P0001',
+      hint = 'You changed your name a moment ago. Try again in a few seconds.';
+  end if;
+  insert into public.rate_events (user_id, action) values (v_uid, 'rename');
+  begin
+    insert into public.guest_names (user_id, username) values (v_uid, p_username)
+    on conflict (user_id) do update
+      set username = excluded.username, claimed_at = now(), last_used_at = now();
+  exception when unique_violation then
+    raise exception 'USERNAME_TAKEN' using errcode = 'P0001',
+      hint = 'Someone is using that name. Try other digits.';
+  end;
+  return p_username;
+end;
+$$;
+
+-- Hide a message once `auto_hide_reports` different guests have reported it
+-- (open reports). Moderators can unhide it on the admin page.
+create or replace function public.reports_after_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.message_id is null then
+    return null;
+  end if;
+  if (select count(distinct r.reporter_id) from public.reports r
+      where r.message_id = new.message_id and r.status = 'open')
+     >= public.gc_setting('auto_hide_reports') then
+    perform public.gc_set_hidden(new.message_id, true);
+  end if;
+  return null;
+end;
+$$;
+
+-- Hide/unhide and tell clients (owner-only helper).
+create or replace function public.gc_set_hidden(p_message_id uuid, p_hidden boolean)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_msg public.messages%rowtype;
+begin
+  perform set_config('gc.trusted_update', 'on', true);
+  update public.messages set hidden = p_hidden
+  where id = p_message_id and hidden is distinct from p_hidden
+  returning * into v_msg;
+  perform set_config('gc.trusted_update', 'off', true);
+  if not found then
+    return;
+  end if;
+  begin
+    if p_hidden then
+      perform realtime.send(jsonb_build_object('id', p_message_id), 'message_deleted', 'room:global', true);
+    elsif v_msg.expires_at > now() then
+      perform realtime.send(jsonb_build_object(
+        'id', v_msg.id, 'username', v_msg.username, 'content', v_msg.content,
+        'created_at', v_msg.created_at, 'expires_at', v_msg.expires_at, 'kind', v_msg.kind,
+        'reply_to', v_msg.reply_to, 'image_path', v_msg.image_path, 'poll_options', v_msg.poll_options,
+        'is_bot', v_msg.is_bot, 'command', v_msg.command, 'sticker', v_msg.sticker,
+        'country', v_msg.country, 'edited_at', v_msg.edited_at),
+        'message_created', 'room:global', true);
+    end if;
+  exception when others then
+    raise warning 'GlobalChat broadcast failed: %', sqlerrm;
+  end;
+end;
+$$;
+
+drop trigger if exists reports_after_insert on public.reports;
+create trigger reports_after_insert
+  after insert on public.reports
+  for each row execute function public.reports_after_insert();
+
+-- Moderator actions (admin.html). Each checks is_moderator() itself.
+create or replace function public.gc_require_moderator()
+returns void
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if not public.is_moderator() then
+    raise exception 'NOT_MODERATOR' using errcode = '42501';
+  end if;
+end;
+$$;
+
+create or replace function public.gc_mod_pin(p_message_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  perform public.gc_require_moderator();
+  update public.room_state set pinned_message_id = p_message_id, updated_at = now() where id = 1;
+  perform public.gc_broadcast_room_state();
+end;
+$$;
+
+create or replace function public.gc_mod_set_slow_mode(p_seconds integer)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  perform public.gc_require_moderator();
+  update public.room_state
+    set slow_mode_seconds = least(greatest(coalesce(p_seconds, 0), 0), public.gc_setting('max_slow_mode_seconds')),
+        updated_at = now()
+    where id = 1;
+  perform public.gc_broadcast_room_state();
+end;
+$$;
+
+create or replace function public.gc_mod_set_hidden(p_message_id uuid, p_hidden boolean)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  perform public.gc_require_moderator();
+  perform public.gc_set_hidden(p_message_id, p_hidden);
+end;
+$$;
+
+-- Ban whoever wrote a message (moderators can't read user ids directly).
+-- p_minutes null = permanent.
+create or replace function public.gc_mod_ban_author(p_message_id uuid, p_minutes integer, p_reason text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid;
+begin
+  perform public.gc_require_moderator();
+  select coalesce(m.user_id, r.reported_user_id) into v_uid
+  from (select p_message_id as id) x
+  left join public.messages m on m.id = x.id
+  left join public.reports r on r.message_id = x.id
+  limit 1;
+  if v_uid is null then
+    raise exception 'NO_AUTHOR' using errcode = 'P0001',
+      hint = 'That message has no guest author (bot) or is gone.';
+  end if;
+  insert into public.banned_users (user_id, reason, banned_until, created_by)
+  values (v_uid, left(p_reason, 500),
+          case when p_minutes is null then null else now() + make_interval(mins => p_minutes) end,
+          auth.uid())
+  on conflict (user_id) do update
+    set reason = excluded.reason, banned_until = excluded.banned_until,
+        created_at = now(), created_by = excluded.created_by;
+end;
+$$;
+
+revoke all on function public.gc_bot_post(text, uuid)               from public, anon, authenticated;
+revoke all on function public.gc_post_daily_question()              from public, anon, authenticated;
+revoke all on function public.gc_trivia_tick()                      from public, anon, authenticated;
+revoke all on function public.gc_set_hidden(uuid, boolean)          from public, anon, authenticated;
+revoke all on function public.gc_broadcast_room_state()             from public, anon, authenticated;
+revoke all on function public.gc_daily_question_text()              from public, anon, authenticated;
+revoke all on function public.gc_room_stats()                       from public, anon, authenticated;
+revoke all on function public.gc_room_state()                       from public, anon;
+revoke all on function public.gc_edit_message(uuid, text)           from public, anon;
+revoke all on function public.gc_rename(text)                       from public, anon;
+revoke all on function public.gc_require_moderator()                from public, anon;
+revoke all on function public.gc_mod_pin(uuid)                      from public, anon;
+revoke all on function public.gc_mod_set_slow_mode(integer)         from public, anon;
+revoke all on function public.gc_mod_set_hidden(uuid, boolean)      from public, anon;
+revoke all on function public.gc_mod_ban_author(uuid, integer, text) from public, anon;
+grant execute on function public.gc_room_state()                       to authenticated;
+grant execute on function public.gc_edit_message(uuid, text)           to authenticated;
+grant execute on function public.gc_rename(text)                       to authenticated;
+grant execute on function public.gc_require_moderator()                to authenticated;
+grant execute on function public.gc_mod_pin(uuid)                      to authenticated;
+grant execute on function public.gc_mod_set_slow_mode(integer)         to authenticated;
+grant execute on function public.gc_mod_set_hidden(uuid, boolean)      to authenticated;
+grant execute on function public.gc_mod_ban_author(uuid, integer, text) to authenticated;
+
+
+-- -----------------------------------------------------------------------------
+-- 11. Scheduled cleanup (pg_cron)
 -- -----------------------------------------------------------------------------
 -- Physically deletes expired messages (their reactions and votes go with them)
 -- every 5 minutes and forgets display-name claims that have been idle for a day. If pg_cron is unavailable this block
@@ -1175,6 +2072,9 @@ begin
   delete from public.banned_users
     where banned_until is not null and banned_until < now() - interval '1 day';
   delete from public.rate_events where created_at < now() - interval '1 hour';
+  delete from public.stats_posters where day < (now() at time zone 'utc')::date - 1;
+  delete from public.stats_hourly  where day < (now() at time zone 'utc')::date - 35;
+  delete from public.trivia_rounds where asked_at < now() - interval '7 days';
 
   -- Realtime keeps its own copy of each broadcast payload in realtime.messages
   -- (Supabase also prunes this table automatically). Purge ours after an hour
@@ -1200,7 +2100,10 @@ begin
     '*/5 * * * *',
     'select public.gc_cleanup();'
   );
+  perform cron.schedule('globalchat-trivia', '*/5 * * * *', 'select public.gc_trivia_tick();');
+  perform cron.schedule('globalchat-daily-question', '3 12 * * *', 'select public.gc_post_daily_question();');
   raise notice 'GlobalChat: pg_cron job "globalchat-cleanup" scheduled every 5 minutes.';
+  raise notice 'GlobalChat: room bot jobs scheduled (trivia every 5 min check, question of the day 12:03 UTC).';
 exception when others then
   raise notice 'GlobalChat: pg_cron not available (%). Use the alternative in README.', sqlerrm;
 end;

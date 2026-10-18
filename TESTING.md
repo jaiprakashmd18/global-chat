@@ -181,3 +181,28 @@ Use Guest A and Guest B as above, after re-running `schema.sql` and deploying th
 - [ ] **Old database:** with the new page against a database that hasn't been upgraded, plain messages still send and the **+**, reply, react and delete buttons are hidden.
 
 Run the database part locally with `tests/local-db/run.sh`; the `--- F` sections in `feature-tests.sql` cover these rules.
+
+## Community features
+
+After re-running `schema.sql` (and `check-setup.sql` shows all OK):
+
+- [ ] **Name:** sidebar → Change name → "Jai" → you become `Jai_####`; your earlier messages still show as yours. A name with a swear word is refused.
+- [ ] **Formatting:** send `*bold* _italic_ \`code\` ||spoiler||`; the spoiler reveals on tap. `snake_case` stays as typed.
+- [ ] **Times:** new messages say "now", then "1m ago"…; a message in its last 10 minutes shows "⏳ Nm left".
+- [ ] **Edit:** send a typo, use the pencil within 2 minutes, fix it: everyone sees "edited". After 2 minutes the pencil is gone.
+- [ ] **Mute:** ⋯ → Mute on someone: their messages collapse ("Show" reveals one). Unmute in Appearance & alerts.
+- [ ] **Sounds / drafts / themes:** turn on "Soft sound for every new message"; type, reload: the draft is back; try AMOLED, High contrast and Neon.
+- [ ] **Confetti:** someone sends "happy birthday" → confetti (not with reduced motion turned on).
+- [ ] **Install:** browser menu → Install / Add to Home Screen works on the deployed HTTPS site.
+- [ ] **Flags:** choose a country in settings: your flag shows on new messages, in the online list and in "Where people are".
+- [ ] **Stickers / voice:** + → Sticker sends a sticker. + → Voice note asks for the microphone, records up to 30 s, and plays for others.
+- [ ] **Commands:** `/roll`, `/roll 20`, `/flip`, `/8ball Will it rain?` come back with a "/roll" (etc.) badge. Typing "🎲 rolled 6" by hand gets no badge.
+- [ ] **Word filter:** a message with a listed word arrives masked (`f***`).
+- [ ] **Auto-hide:** three different guests report one message → it disappears for guests and appears as HIDDEN on the admin page.
+- [ ] **Admin page:** sign in at `/admin.html` with a moderator account; pin a message (📌 bar appears for everyone), turn on slow mode (🐢 banner, second message is refused), unhide, delete, ban, add/remove a filter word.
+- [ ] **Room bot:** while people are chatting, a 🧠 trivia question appears within 15 minutes; the first right answer gets a 🎉 reply. The ☀️ question of the day posts at 12:03 UTC and shows in the sidebar.
+- [ ] **Stats / word of the day:** the sidebar shows today's messages and people, and a word of the day.
+- [ ] **Share:** the share button opens the share sheet (phone) or copies the link (desktop). Pasting the link in WhatsApp shows the preview card once `og:image` has your full URL.
+- [ ] **Translate:** ⋯ → Translate translates in place (Chrome with the built-in translator) or opens Google Translate.
+
+`tests/local-db/community-tests.sql` (run by `tests/local-db/run.sh`) covers the database side: commands, word filter, stickers, voice, flags, editing, renaming, slow mode, pin, auto-hide, bans, trivia, question of the day and cleanup.

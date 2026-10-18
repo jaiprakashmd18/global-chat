@@ -5,6 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <title>GlobalChat — One world. One chat.</title>
   <meta name="description" content="One public chatroom for everyone online. No sign-up. Messages disappear after an hour.">
+  <!-- Link previews (WhatsApp, Instagram, X, iMessage…) -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="GlobalChat">
+  <meta property="og:title" content="GlobalChat — One world. One chat.">
+  <meta property="og:description" content="One public chatroom for everyone online. No sign-up. Messages disappear after an hour.">
+  <meta property="og:image" content="og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="GlobalChat logo: a planet with an orbit, and the words One world. One chat.">
+  <meta name="twitter:card" content="summary_large_image">
+  <!-- Installable app -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="theme-color" content="#0A0B12">
   <meta name="color-scheme" content="dark light">
   <meta name="referrer" content="no-referrer">
@@ -40,9 +54,10 @@
         <p class="side-heading">You're chatting as</p>
         <div class="identity-row">
           <span class="avatar avatar-lg" id="side-avatar" aria-hidden="true">?</span>
-          <strong class="identity-name" id="side-username">Joining…</strong>
+          <strong class="identity-name"><span id="side-username">Joining…</span> <span class="flag" id="side-flag"></span></strong>
         </div>
-        <p class="side-note">A random name for this tab only. Close the tab and it's gone.</p>
+        <p class="side-note">A name for this tab only. Close the tab and it's gone.</p>
+        <button type="button" class="link-button needs-v3" data-open-rename>Change name</button>
       </section>
 
       <section class="card people" aria-labelledby="people-heading">
@@ -52,6 +67,29 @@
         </div>
         <p class="presence-line"><span class="presence-dot" aria-hidden="true"></span><span id="side-online">Counting people online…</span></p>
         <ul class="people-list" id="side-people" aria-label="People online"></ul>
+      </section>
+
+      <section class="card needs-v3" data-card="question" hidden aria-labelledby="qotd-heading">
+        <p class="side-heading" id="qotd-heading">☀️ Question of the day</p>
+        <p class="card-text" data-slot="question"></p>
+        <button type="button" class="link-button" data-answer-question>Answer in the chat</button>
+      </section>
+
+      <section class="card" data-card="countries" hidden aria-labelledby="countries-heading">
+        <p class="side-heading" id="countries-heading">🌍 Where people are</p>
+        <ul class="country-list" data-slot="countries"></ul>
+        <p class="side-note" data-slot="countries-note"></p>
+      </section>
+
+      <section class="card needs-v3" data-card="stats" hidden aria-labelledby="stats-heading">
+        <p class="side-heading" id="stats-heading">📈 Room stats</p>
+        <dl class="stats" data-slot="stats"></dl>
+      </section>
+
+      <section class="card" aria-labelledby="wotd-heading">
+        <p class="side-heading" id="wotd-heading">📚 Word of the day</p>
+        <p class="wotd"><strong data-slot="wotd-word"></strong> <span class="wotd-lang" data-slot="wotd-lang"></span></p>
+        <p class="card-text" data-slot="wotd-meaning"></p>
       </section>
 
       <details class="card rules-card">
@@ -96,6 +134,9 @@
           <button type="button" class="online-pill" id="online-pill" title="People online right now" data-open-people>
             <span class="presence-dot" aria-hidden="true"></span><span id="online-count">–</span><span class="visually-hidden"> online. Show who's here.</span>
           </button>
+          <button type="button" class="icon-button" id="share-button" aria-label="Share GlobalChat" title="Share">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="M8.2 10.8l7.6-4.4M8.2 13.2l7.6 4.4"/></svg>
+          </button>
           <button type="button" class="icon-button" id="search-toggle" aria-label="Search messages" aria-expanded="false" aria-controls="search-bar">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
           </button>
@@ -120,6 +161,13 @@
 
       <div class="conn-banner" id="conn-banner" hidden></div>
 
+      <button type="button" class="pin-bar needs-v3" id="pin-bar" hidden>
+        <span class="pin-icon" aria-hidden="true">📌</span>
+        <span class="pin-label">Pinned</span>
+        <span class="pin-text"><strong id="pin-name"></strong> <span id="pin-content"></span></span>
+      </button>
+      <p class="slow-bar needs-v3" id="slow-bar" hidden>🐢 Slow mode is on: one message every <strong id="slow-seconds"></strong> seconds.</p>
+
       <div class="feed-wrap" id="feed-wrap">
         <div class="drop-hint" id="drop-hint" hidden><p>Drop an image to share it</p></div>
         <div class="feed" id="feed" tabindex="0" aria-label="Messages">
@@ -134,7 +182,7 @@
 
       <div class="notice notice-warn" id="setup-notice" role="status" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9.5 17h-19L12 3z"/><path d="M12 10v4M12 17h.01"/></svg>
-        <p><strong>Photos, polls, replies and reactions are switched off</strong> because this site's database hasn't been upgraded yet. Site owner: run <code>schema.sql</code> again in Supabase, then <code>check-setup.sql</code> to confirm.</p>
+        <p><strong id="setup-notice-title">Photos, polls, replies and reactions are switched off</strong> because this site's database hasn't been upgraded yet. Site owner: run <code>schema.sql</code> again in Supabase, then <code>check-setup.sql</code> to confirm.</p>
       </div>
 
       <div class="notice" id="privacy-notice" hidden>
@@ -155,6 +203,29 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
           </button>
         </div>
+
+        <div class="composer-context" id="edit-bar" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/></svg>
+          <p><span class="context-label"><strong>Editing your message</strong></span><span class="context-text" id="edit-text"></span></p>
+          <button type="button" class="icon-button icon-button-sm" id="edit-cancel" aria-label="Cancel editing">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
+
+        <div class="composer-context voice-bar" id="voice-bar" hidden>
+          <span class="rec-dot" aria-hidden="true"></span>
+          <p><span class="context-label" id="voice-label">Recording…</span><span class="context-text" id="voice-time">0:00 / 0:30</span></p>
+          <audio id="voice-preview" controls hidden></audio>
+          <button type="button" class="button button-quiet button-sm" id="voice-stop">Stop</button>
+          <button type="button" class="button button-primary button-sm" id="voice-send" hidden>Send</button>
+          <button type="button" class="icon-button icon-button-sm" id="voice-cancel" aria-label="Discard voice note">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
+
+        <p class="command-hint needs-v3" id="command-hint" hidden>
+          <code>/roll</code> dice · <code>/roll 20</code> 20-sided · <code>/flip</code> coin · <code>/8ball question</code> magic 8-ball
+        </p>
 
         <div class="composer-context" id="image-bar" hidden>
           <img class="image-thumb" id="image-thumb" alt="">
@@ -179,7 +250,16 @@
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>
                 Poll
               </button>
+              <button type="button" id="attach-sticker" class="needs-v3">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-8-8h8v8z"/><path d="M20 12h-5a3 3 0 0 1-3-3V4"/></svg>
+                Sticker
+              </button>
+              <button type="button" id="attach-voice" class="needs-v3">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+                Voice note
+              </button>
             </div>
+            <div class="sticker-panel" id="sticker-panel" role="group" aria-label="Stickers" hidden></div>
             <input type="file" id="image-input" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
           </div>
           <div class="popover-wrap emoji-wrap">
@@ -260,6 +340,11 @@
           <label><input type="radio" name="theme" value="light"><span>Light</span></label>
           <label><input type="radio" name="theme" value="dark"><span>Dark</span></label>
         </div>
+        <div class="segmented">
+          <label><input type="radio" name="theme" value="amoled"><span>AMOLED</span></label>
+          <label><input type="radio" name="theme" value="contrast"><span>High contrast</span></label>
+          <label><input type="radio" name="theme" value="neon"><span>Neon</span></label>
+        </div>
       </fieldset>
 
       <fieldset class="setting">
@@ -288,6 +373,24 @@
         <p class="setting-note" id="notify-note" hidden></p>
       </fieldset>
 
+      <fieldset class="setting">
+        <legend>Sounds</legend>
+        <label class="toggle"><input type="checkbox" name="soundAll"><span class="toggle-track" aria-hidden="true"></span> Soft sound for every new message</label>
+      </fieldset>
+
+      <fieldset class="setting needs-v3">
+        <legend>Your flag <span class="optional">Optional</span></legend>
+        <label class="visually-hidden" for="country-select">Country flag shown next to your name</label>
+        <select class="field field-line" id="country-select" name="country"></select>
+        <p class="setting-note setting-note-quiet">Shown next to your name on new messages and in "Where people are". Nobody sees it unless you pick one.</p>
+      </fieldset>
+
+      <fieldset class="setting">
+        <legend>Muted people</legend>
+        <ul class="muted-list" id="muted-list"></ul>
+        <p class="setting-note setting-note-quiet" id="muted-empty">Nobody. Use ⋯ → Mute on a message to hide someone's messages on your screen.</p>
+      </fieldset>
+
       <div class="dialog-actions">
         <button type="submit" class="button button-primary">Done</button>
       </div>
@@ -297,10 +400,30 @@
   <!-- People dialog (phones; desktop shows the list in the sidebar) -->
   <dialog class="dialog" id="people-dialog" aria-labelledby="people-dialog-title">
     <div class="dialog-body">
-      <h2 class="dialog-title" id="people-dialog-title">Online now</h2>
+      <h2 class="dialog-title" id="people-dialog-title">The room</h2>
       <p class="dialog-sub" id="people-dialog-sub">Counting people online…</p>
       <ul class="people-list people-list-dialog" id="dialog-people" aria-label="People online"></ul>
+      <div class="dialog-section needs-v3" data-card="question" hidden>
+        <h3 class="side-heading">☀️ Question of the day</h3>
+        <p class="card-text" data-slot="question"></p>
+        <button type="button" class="link-button" data-answer-question>Answer in the chat</button>
+      </div>
+      <div class="dialog-section" data-card="countries" hidden>
+        <h3 class="side-heading">🌍 Where people are</h3>
+        <ul class="country-list" data-slot="countries"></ul>
+        <p class="side-note" data-slot="countries-note"></p>
+      </div>
+      <div class="dialog-section needs-v3" data-card="stats" hidden>
+        <h3 class="side-heading">📈 Room stats</h3>
+        <dl class="stats" data-slot="stats"></dl>
+      </div>
+      <div class="dialog-section">
+        <h3 class="side-heading">📚 Word of the day</h3>
+        <p class="wotd"><strong data-slot="wotd-word"></strong> <span class="wotd-lang" data-slot="wotd-lang"></span></p>
+        <p class="card-text" data-slot="wotd-meaning"></p>
+      </div>
       <div class="dialog-actions">
+        <button type="button" class="button button-quiet needs-v3" data-open-rename>Change my name</button>
         <button type="button" class="button button-primary" data-close-dialog>Close</button>
       </div>
     </div>
@@ -330,6 +453,18 @@
       <h3>Reactions and polls</h3>
       <p>Everyone sees how many people reacted or voted, never who.</p>
 
+      <h3>Fun stuff</h3>
+      <p>Type <em>/roll</em>, <em>/roll 20</em>, <em>/flip</em> or <em>/8ball your question</em>: the server rolls the dice, so nobody can fake a result. Formatting: <em>*bold*</em>, <em>_italic_</em>, <em>`code`</em> and <em>||spoiler||</em>. The room bot posts a question of the day and, while people are chatting, a trivia question every 15 minutes. First right answer wins.</p>
+
+      <h3>Voice notes, stickers and flags</h3>
+      <p>Voice notes (up to 30 seconds) are stored privately like photos and deleted after their message. Your country flag is optional, chosen by you in settings, and never detected from your location.</p>
+
+      <h3>Editing, muting, translating</h3>
+      <p>You can edit a text message for 2 minutes after sending it; edited messages are marked. Muting someone hides their messages only on your screen. Translate uses your browser's built-in translator when it has one; otherwise it opens Google Translate in a new tab, which sends that message's text to Google.</p>
+
+      <h3>Safety</h3>
+      <p>Common swear words are masked automatically. A message reported by 3 different people is hidden until a moderator reviews it. Moderators can also turn on slow mode or pin a message.</p>
+
       <h3>Reports</h3>
       <p>When you report a message, a copy of it is kept for moderators even after it disappears from the room, so they can review it. Reports are visible only to moderators.</p>
 
@@ -337,7 +472,7 @@
       <p>Send us a message on Instagram: <a class="ig-inline" href="https://www.instagram.com/global.chat_" target="_blank" rel="noopener noreferrer">@global.chat_</a>. To report a harmful message, use <em>Report</em> on the message instead, so moderators get a copy of it.</p>
 
       <h3>Your settings</h3>
-      <p>Theme, colour and alert choices are stored only in this browser.</p>
+      <p>Theme, colour, sounds, your flag choice, muted names and unsent drafts are stored only in this browser.</p>
 
       <div class="dialog-actions">
         <button type="button" class="button button-primary" data-close-dialog>Got it</button>
@@ -393,6 +528,29 @@
     </button>
   </dialog>
 
+  <!-- Change name -->
+  <dialog class="dialog dialog-sm" id="rename-dialog" aria-labelledby="rename-title">
+    <form class="dialog-body" id="rename-form" novalidate>
+      <h2 class="dialog-title" id="rename-title">Choose your name</h2>
+      <p class="dialog-sub">Letters only. We add four numbers so names stay unique. Messages you already sent keep your old name.</p>
+      <label class="field-label" for="rename-input">Name</label>
+      <div class="rename-row">
+        <input class="field field-line" id="rename-input" maxlength="15" autocomplete="off" spellcheck="false" placeholder="e.g. Jai" required>
+        <span class="rename-digits" id="rename-digits">_0000</span>
+      </div>
+      <p class="composer-error" id="rename-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="button button-quiet" data-close-dialog>Cancel</button>
+        <button type="submit" class="button button-primary" id="rename-submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- "More" menu for a message (positioned next to its ⋯ button) -->
+  <div class="more-menu" id="more-menu" role="menu" hidden></div>
+
+  <canvas class="confetti" id="confetti" aria-hidden="true" hidden></canvas>
+
   <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
 
   <!-- One chat message. Filled in with textContent / text nodes only — never innerHTML. -->
@@ -402,8 +560,16 @@
       <div class="msg-main">
         <div class="msg-head">
           <button type="button" class="msg-name"></button>
+          <span class="flag msg-flag" hidden></span>
           <span class="msg-you" hidden>you</span>
+          <span class="msg-badge" hidden></span>
           <time class="msg-time"></time>
+          <span class="msg-edited" hidden>edited</span>
+          <span class="msg-left" hidden></span>
+        </div>
+        <div class="msg-muted" hidden>
+          <span>Message from someone you muted</span>
+          <button type="button" class="link-button msg-unmute-once">Show</button>
         </div>
         <div class="msg-bubble">
           <button type="button" class="msg-quote" hidden>
@@ -411,8 +577,11 @@
             <span class="msg-quote-text"></span>
           </button>
           <button type="button" class="msg-image" hidden aria-label="Open image"><img alt="" decoding="async"></button>
+          <img class="msg-sticker" hidden alt="" width="120" height="120">
+          <audio class="msg-voice" controls preload="none" hidden></audio>
           <p class="msg-text"></p>
           <div class="poll" hidden></div>
+          <p class="msg-translation" hidden></p>
         </div>
         <div class="msg-reactions" hidden></div>
       </div>
@@ -423,14 +592,11 @@
         <button type="button" class="msg-action msg-react needs-v2" aria-label="Add reaction" title="React">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01"/></svg>
         </button>
-        <button type="button" class="msg-action msg-copy" aria-label="Copy message" title="Copy">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
+        <button type="button" class="msg-action msg-edit needs-v3" aria-label="Edit your message" title="Edit (for 2 minutes)" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/></svg>
         </button>
-        <button type="button" class="msg-action msg-delete needs-v2" aria-label="Delete your message" title="Delete" hidden>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
-        </button>
-        <button type="button" class="msg-action msg-report" title="Report" hidden>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>
+        <button type="button" class="msg-action msg-more" aria-label="More actions" title="More" aria-haspopup="menu">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
         </button>
       </div>
     </li>

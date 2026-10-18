@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs><radialGradient id="g" cx="35%" cy="30%" r="75%"><stop offset="0" stop-color="#FDBA74"/><stop offset="1" stop-color="#F97316"/></radialGradient></defs>
+  <ellipse cx="62" cy="62" rx="56" ry="17" fill="none" stroke="#FDBA74" stroke-width="5" opacity=".9" transform="rotate(-18 62 62)"/>
+  <circle cx="62" cy="62" r="36" fill="url(#g)" stroke="#1B1430" stroke-width="3"/>
+  <path d="M44 58q6-7 12 0M68 58q6-7 12 0" stroke="#1B1430" stroke-width="4" fill="none" stroke-linecap="round"/><path d="M48 68h28q-2 14-14 14t-14-14z" fill="#1B1430"/><path d="M53 76q9 6 18 0" fill="#F43F5E"/><circle cx="42" cy="68" r="5" fill="#fff" opacity=".35"/><circle cx="82" cy="68" r="5" fill="#fff" opacity=".35"/>
+  
+  <g transform="rotate(-8 30 22)"><rect x="4" y="6" width="69" height="36" rx="18" fill="#fff" stroke="#1B1430" stroke-width="3"/>
+  <text x="39" y="32" text-anchor="middle" font-family="Arial Black,Arial,Helvetica,sans-serif" font-weight="900" font-size="22" fill="#1B1430">LOL</text></g>
+</svg>

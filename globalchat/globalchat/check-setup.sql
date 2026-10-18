@@ -32,5 +32,24 @@ from (values
   ('chat-images storage bucket',        exists (select 1 from storage.buckets where id = 'chat-images')),
   ('storage policy: upload',            exists (select 1 from pg_policies where schemaname = 'storage' and tablename = 'objects' and policyname = 'chat-images: guests upload own')),
   ('storage policy: view while live',   exists (select 1 from pg_policies where schemaname = 'storage' and tablename = 'objects' and policyname = 'chat-images: read while live')),
-  ('gc_dead_images() for cleanup',      to_regprocedure('public.gc_dead_images()') is not null)
+  ('gc_dead_images() for cleanup',      to_regprocedure('public.gc_dead_images()') is not null),
+
+  -- Community features (stickers, voice notes, editing, flags, bot, admin)
+  ('messages.is_bot column',            exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'messages' and column_name = 'is_bot')),
+  ('messages.edited_at column',         exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'messages' and column_name = 'edited_at')),
+  ('guests can read community columns', exists (select 1 from information_schema.column_privileges where table_schema = 'public' and table_name = 'messages' and column_name = 'country' and grantee = 'authenticated' and privilege_type = 'SELECT')),
+  ('room_state row',                    exists (select 1 from public.room_state where id = 1)),
+  ('word filter list',                  exists (select 1 from public.blocked_words)),
+  ('trivia questions',                  exists (select 1 from public.trivia_questions)),
+  ('questions of the day',              exists (select 1 from public.daily_questions)),
+  ('gc_room_state()',                   to_regprocedure('public.gc_room_state()') is not null),
+  ('gc_edit_message()',                 to_regprocedure('public.gc_edit_message(uuid,text)') is not null),
+  ('gc_rename()',                       to_regprocedure('public.gc_rename(text)') is not null),
+  ('moderator functions',               to_regprocedure('public.gc_mod_ban_author(uuid,integer,text)') is not null),
+  ('voice notes allowed in bucket',     exists (select 1 from storage.buckets where id = 'chat-images' and 'audio/webm' = any (allowed_mime_types)))
 ) as checks(item, ok);
+
+-- Scheduled jobs (pg_cron). Expect globalchat-cleanup, globalchat-trivia and
+-- globalchat-daily-question. If this errors with "schema cron does not
+-- exist", pg_cron isn't enabled: see README → Scheduled cleanup.
+select jobname, schedule, active from cron.job where jobname like 'globalchat-%' order by jobname;

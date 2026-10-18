@@ -21,17 +21,47 @@ It's a static frontend (HTML, CSS, vanilla JS modules) on top of Supabase: anony
 - **Delete your own message** at any time before it expires.
 - **Welcome bot for an empty room**: if you post while nobody else is online, a clearly labelled "GlobalChat Bot" replies after a second (once per quiet spell, at most 3 per tab). When someone then joins, a small "… just joined. Say hi 👋" note appears. Both exist only in your own tab: they're never stored or shown to anyone else.
 - **Emoji picker**, **message search**, **copy message**, **unread count in the tab title**, and quick conversation starters when the room is empty.
+
+**Community features**
+
+- **Choose your own name**: "Change name" → type letters, we add four digits (`Jai_4821`). Messages you already sent keep the old name.
+- **Text formatting**: `*bold*`, `_italic_`, `` `code` `` and `||spoiler||` (tap to reveal).
+- **Relative times** ("now", "5m ago") and a "⏳ 7m left" countdown in a message's last 10 minutes.
+- **Edit your message** for 2 minutes after sending; edited messages are marked "edited".
+- **Mute someone** (⋯ → Mute): their messages collapse on your screen only. Manage the list in Appearance & alerts.
+- **Sounds**: an optional soft tick for every new message (plus the existing mention sound).
+- **Drafts**: an unsent message survives a reload of the tab.
+- **More themes**: AMOLED (pure black), High contrast and Neon, alongside System / Light / Dark.
+- **Confetti** 🎉 when a message says happy birthday or congrats.
+- **Installable app**: add to home screen on phones and desktop (`manifest.webmanifest`, `sw.js`). The service worker caches only the page itself, never chat data.
+- **Country flag**, opt-in: pick one in settings and it shows next to your name and in **"Where people are"** (a count of flags among people online). Never detected from your location.
+- **Pinned message** and **slow mode**, set by moderators on the admin page.
+- **Room bot** (server side, labelled "bot"): a **question of the day** at 12:03 UTC, and **trivia** every 15 minutes while people are chatting. First correct answer wins, and the bot announces the winner.
+- **Stickers**: eight GlobalChat planet stickers (`stickers/*.svg`).
+- **Voice notes** up to 30 seconds, stored privately like photos and deleted with their message.
+- **Chat commands**: `/roll`, `/roll 20`, `/flip`, `/8ball question`. The database picks the result and marks it, so nobody can fake a roll.
+- **Word filter**: common swear words are masked (`f***`) in messages, poll options and nicknames. Moderators can edit the list.
+- **Auto-hide**: a message reported by 3 different people is hidden until a moderator checks it.
+- **Admin page** (`admin.html`): reports, live messages (including hidden ones), pin, hide/unhide, delete, ban, slow mode, word filter and bans, all from a web page instead of SQL. See MODERATION.md.
+- **Room stats** in the sidebar: messages and people today, this week, and the busiest hour in your time zone.
+- **Word of the day** from languages around the world.
+- **Share button** and a link-preview card (`og-image.png`) for WhatsApp, Instagram, X and others.
+- **Translate** (⋯ → Translate): uses the browser's built-in translator when it has one (nothing leaves the device); otherwise it opens Google Translate in a new tab, which sends that message's text to Google.
+
+On phones, tap the online count to open **The room**: people online, flags, stats, question of the day and word of the day.
 - **Fading messages**: messages fade slightly in their last five minutes before they disappear.
 - Keyboard: <kbd>/</kbd> focuses the message box, <kbd>Esc</kbd> closes search and the emoji picker.
 
-Presence and typing use the existing Realtime presence permission. Replies, reactions, polls, images and deleting need the tables and functions in `schema.sql`, plus one Edge Function for image cleanup ([step 9b](#9b-image-cleanup-edge-function)). If the page is deployed before the database is upgraded, plain chat keeps working and those features stay hidden.
+Presence and typing use the existing Realtime presence permission. Replies, reactions, polls, images, voice notes, stickers, editing, flags, the room bot, stats and the admin page need the tables and functions in `schema.sql`, plus one Edge Function for image and voice-note cleanup ([step 9b](#9b-image-cleanup-edge-function)). If the page is deployed before the database is upgraded, it detects what the database supports: plain chat keeps working and the missing features stay hidden, with a yellow notice saying so.
 
 ### Upgrading an existing GlobalChat
 
 1. Dashboard → **SQL Editor** → **New query** → paste **all** of `schema.sql` → **Run**. It's safe to re-run: new columns and tables are added in place and existing messages are kept. If the editor asks you to confirm destructive operations or RLS, choose to run the query. If it shows an **error**, nothing was applied (the whole script rolls back); fix or report that first error and run it again.
 2. Open another **New query**, paste `check-setup.sql`, **Run**. Every row should say **OK**. If the `messages.*` column rows are MISSING, the site shows a yellow "switched off" notice and hides the new buttons. If only the storage rows (bucket, storage policies) are MISSING, everything else works but sending a photo fails with "Image sharing isn't set up on this server yet".
 3. Deploy the `cleanup-images` Edge Function and schedule it ([step 9b](#9b-image-cleanup-edge-function)). Paste the code from this repo; don't keep Supabase's "Hello" template.
-4. Redeploy the site (the security headers now allow images from `*.supabase.co`).
+4. Redeploy the site. The security headers now allow images and audio from `*.supabase.co`, and the microphone for voice notes on your own site only.
+5. For the admin page, create a moderator account (MODERATION.md → "Add a moderator"), then open `/admin.html` and sign in.
+6. For link previews, edit `<meta property="og:image">` in `index.html` to the **full** address of `og-image.png` on your site (for example `https://your-site.vercel.app/og-image.png`). Some apps, WhatsApp included, ignore relative image paths.
 
 ---
 
@@ -100,7 +130,11 @@ Design decisions worth knowing:
 | `index.html` | Page structure, dialogs, message template |
 | `styles.css` | All styling (light/dark themes, accents, responsive, reduced motion) |
 | `theme.js` | Applies the saved theme before first paint; stores appearance and alert preferences |
-| `app.js` | Auth, realtime, presence, typing, messaging, mentions, search, expiry, reporting |
+| `app.js` | Auth, realtime, presence, typing, messaging, mentions, search, expiry, reporting, and all the community features |
+| `admin.html`, `admin.js`, `admin.css` | Moderation page for moderator accounts |
+| `stickers/` | The eight sticker images (SVG) |
+| `manifest.webmanifest`, `sw.js`, `icons/` | Installable app: manifest, service worker (page shell only), icons |
+| `og-image.png` | 1200×630 link-preview image |
 | `config.js` | **Your** Supabase URL and public key (placeholders until you edit it) |
 | `schema.sql` | Complete database migration (run once; re-run to upgrade) |
 | `check-setup.sql` | Read-only checklist query: shows OK / MISSING for every database piece |
@@ -109,7 +143,7 @@ Design decisions worth knowing:
 | `vercel.json`, `_headers` | Security headers (CSP etc.) for Vercel / Cloudflare Pages |
 | `MODERATION.md` | Moderation workflow and SQL snippets |
 | `TESTING.md` | Test checklist |
-| `tests/local-db/` | Optional: run the migration + security and feature tests against local Postgres |
+| `tests/local-db/` | Optional: run the migration + security, feature and community tests against local Postgres |
 
 ---
 
@@ -344,7 +378,9 @@ Nothing here has been deployed or connected to a live Supabase project yet. You 
 - [ ] Deploy to Vercel or Cloudflare Pages (step 8)
 - [ ] Set Site URL in Supabase Auth (after deploy)
 - [ ] Configure Turnstile + CAPTCHA protection and sign-in rate limits (before launch)
-- [ ] Add at least one moderator account (MODERATION.md)
+- [ ] Add at least one moderator account (MODERATION.md) and sign in at `/admin.html`
+- [ ] Deploy and schedule the `cleanup-images` Edge Function (step 9b)
+- [ ] Set the full `og:image` URL in `index.html` for link previews
 - [ ] Run the TESTING.md checklist against the live deployment
 
 ## Privacy notes and limits
@@ -352,6 +388,8 @@ Nothing here has been deployed or connected to a live Supabase project yet. You 
 - Other visitors see only random names, message text, and times, plus each open tab's random name in the online list and a typing hint while someone writes. IP addresses, emails, and internal IDs are never shown, and `user_id` isn't readable through the API.
 - GlobalChat isn't fully anonymous. Supabase and your host process IP addresses and request logs to operate and secure the service.
 - Expiry hides messages after one hour and cleanup deletes them within about five minutes after that. It does **not** guarantee removal from database backups, provider logs, or screenshots and copies other people made.
+- Country flags are only what a guest chooses to show; nothing is derived from IP or location. Mute lists, drafts and theme choices stay in the browser.
+- Room stats count messages per hour and, per day, which guest sessions posted (to count people). Those per-day session rows are deleted after two days; hourly counts after 35 days.
 - Reported messages are copied into `reports` as evidence and kept until a moderator deletes the report. For a reported image, the file is kept while the report is `open`, then removed by the image cleanup.
 - Images: a signed link someone already opened keeps working until that message would have expired, even if the message is deleted early. Anyone in the room can also save an image while it's up.
 - Reactions and poll votes are stored with the guest's session id (so each person counts once) but are never shown to other guests, and they're deleted with the message.
