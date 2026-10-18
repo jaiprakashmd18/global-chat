@@ -464,7 +464,7 @@ kbd {
 .chat-head-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
 @media (min-width: 960px) { .chat-head-brand .brand-mark { display: none; } }
 
-.chat-title-wrap { display: flex; flex-direction: column; min-width: 0; }
+.chat-title-wrap { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
 .chat-title {
   margin: 0;
   font-family: var(--font-display);
@@ -473,9 +473,11 @@ kbd {
   line-height: 1.15;
   letter-spacing: -0.025em;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.chat-head-meta { display: flex; align-items: center; gap: 4px; }
+.chat-head-meta { display: flex; align-items: center; gap: 4px; flex: none; }
 
 .status {
   display: inline-flex; align-items: center; gap: 6px;
@@ -1164,7 +1166,7 @@ kbd {
    Buttons, dialogs, toasts
    -------------------------------------------------------------------------- */
 .link-button {
-  padding: 0; border: 0; background: none;
+  padding: 3px 0; border: 0; background: none;
   color: var(--hl);
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, var(--hl) 40%, transparent);
@@ -1639,6 +1641,91 @@ select.field { appearance: auto; }
 /* Confetti */
 .confetti { position: fixed; inset: 0; z-index: 45; width: 100vw; height: 100dvh; pointer-events: none; }
 .confetti[hidden] { display: none; }
+
+/* -----------------------------------------------------------------------------
+   Layout sizing for every screen
+   -------------------------------------------------------------------------- */
+/* Header: on phones, Share / Appearance / About move into the ☰ menu. */
+.head-menu { display: none; }
+@media (max-width: 599px) {
+  .head-menu { display: inline-grid; }
+  .chat-head #share-button,
+  .chat-head [data-open-settings],
+  .chat-head .icon-button-mobile { display: none; }
+}
+@media (max-width: 380px) {
+  .chat-head { padding-left: 12px; padding-right: 8px; gap: 6px; }
+  .chat-head-brand .brand-mark { display: none; }
+  .chat-title { font-size: 1.125rem; }
+  .chat-head-meta { gap: 2px; }
+  .chat-head .icon-button { width: 36px; height: 36px; }
+  .online-pill { height: 32px; padding: 0 9px 0 8px; margin-right: 2px; }
+}
+
+/* Messages: a little wider on phones, and actions float instead of taking a
+   column. On touch screens they appear when you tap a message. */
+@media (max-width: 599px) {
+  .msg-main { max-width: 86%; }
+  .feed { padding-left: 8px; padding-right: 8px; }
+}
+@media (hover: none), (max-width: 599px) {
+  .msg-actions {
+    position: absolute;
+    top: -14px; right: 6px;
+    z-index: 3;
+    opacity: 0;
+    pointer-events: none;
+    border-color: var(--line-strong);
+    background: var(--surface);
+    box-shadow: 0 8px 24px -12px rgba(0, 0, 0, 0.5);
+  }
+  .msg.is-mine .msg-actions { right: auto; left: 6px; }
+  .msg:hover .msg-actions { opacity: 0; }
+  .msg.is-selected .msg-actions,
+  .msg:focus-within .msg-actions { opacity: 1; pointer-events: auto; }
+  .msg.is-selected .msg-bubble { box-shadow: 0 0 0 2px var(--accent-soft); }
+  .msg-action { width: 36px; height: 36px; }
+}
+/* A reply quote never sets the bubble's width (its one-line preview is
+   clipped with "…"); the bubble just gets a sensible minimum. */
+.msg-quote { contain: inline-size; }
+.msg-bubble:has(> .msg-quote:not([hidden])) { min-width: min(240px, 62vw); }
+.msg-bubble { max-width: 100%; }
+
+/* Media never wider than the bubble's room. */
+.msg-main { min-width: 0; }
+.poll { min-width: min(260px, 100%); max-width: 100%; }
+.msg-voice { max-width: 100%; }
+.msg-image img { max-width: min(340px, 100%); }
+
+/* Short screens (phones in landscape): give the messages the room. */
+@media (max-height: 520px) and (orientation: landscape) {
+  .chat-head { padding-top: calc(4px + env(safe-area-inset-top, 0px)); padding-bottom: 4px; }
+  .chat-title { font-size: 1.0625rem; }
+  .pin-bar { padding-top: 4px; padding-bottom: 4px; }
+  #privacy-notice { display: none; }
+  .composer { padding-top: 2px; padding-bottom: calc(6px + var(--safe-bottom)); }
+  .composer-meta { display: none; }
+  .typing { height: 16px; margin-bottom: 2px; font-size: 0.75rem; }
+  .composer-input { min-height: 40px; padding: 8px 4px; }
+  .composer-tool, .send-button { width: 40px; height: 40px; }
+}
+
+/* Big screens: use a bit more of the width, keep lines readable. */
+@media (min-width: 1680px) {
+  .app { max-width: 1480px; grid-template-columns: 320px minmax(0, 1fr); }
+}
+@media (min-width: 2200px) {
+  .app { max-width: 1640px; }
+  html { font-size: 17px; }
+}
+
+/* Dialogs fit small and short screens. */
+.dialog { max-height: min(92dvh, 760px); overflow: auto; }
+@media (max-width: 380px) {
+  .dialog-body { padding: 18px; }
+  .segmented span { padding: 8px 6px; font-size: 0.875rem; }
+}
 
 /* -----------------------------------------------------------------------------
    Reduced motion: no pulses, shimmer, or entrance animations.
