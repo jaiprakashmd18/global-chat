@@ -128,6 +128,11 @@
         </button>
       </div>
 
+      <div class="notice notice-warn" id="setup-notice" role="status" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9.5 17h-19L12 3z"/><path d="M12 10v4M12 17h.01"/></svg>
+        <p><strong>Photos, polls, replies and reactions are switched off</strong> because this site's database hasn't been upgraded yet. Site owner: run <code>schema.sql</code> again in Supabase, then <code>check-setup.sql</code> to confirm.</p>
+      </div>
+
       <div class="notice" id="privacy-notice" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/></svg>
         <p>Messages here are public and disappear after an hour. Don't share personal details. <button type="button" class="link-button" data-open-about>How privacy works</button></p>

@@ -859,6 +859,9 @@ kbd {
 .notice > svg { width: 18px; height: 18px; flex: none; fill: var(--accent-soft); stroke: var(--hl); stroke-width: 1.8; stroke-linejoin: round; }
 .notice p { margin: 0; flex: 1; }
 .notice[hidden] { display: none; }
+.notice-warn { border-color: color-mix(in srgb, var(--warn) 45%, transparent); color: var(--text); }
+.notice-warn > svg { fill: none; stroke: var(--warn); }
+.notice-warn code { font-size: 0.875em; padding: 0 5px; border-radius: 5px; background: var(--surface-2); }
 
 .composer {
   position: relative;
