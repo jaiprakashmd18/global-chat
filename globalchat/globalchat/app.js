@@ -560,6 +560,7 @@ function isMissingColumn(error) {
 function enableLegacy() {
   state.legacy = true;
   el.app.dataset.features = 'legacy';
+  document.getElementById('setup-notice').hidden = false;
   console.warn('[GlobalChat] The database uses the original schema. Re-run schema.sql to enable replies, images, polls, reactions and deleting messages.');
 }
 
