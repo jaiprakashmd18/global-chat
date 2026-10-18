@@ -164,3 +164,20 @@ javascript:alert(1)
 
 - [ ] A new tab shows "Quick check before you join" before the chat connects.
 - [ ] Removing `TURNSTILE_SITE_KEY` from `config.js` while CAPTCHA is on in Supabase makes sign-in fail with a clear message (proves the check is enforced server-side). Restore it afterwards.
+
+## Replies, reactions, polls, images and deleting
+
+Use Guest A and Guest B as above, after re-running `schema.sql` and deploying the `cleanup-images` function.
+
+- [ ] **Reply:** A hovers B's message → **Reply**, sends. A's message shows a quote of B's; clicking it scrolls to and flashes the original. B's copy of A's reply is highlighted as "for you".
+- [ ] **Reactions:** B reacts ❤️ to A's message. A sees `❤️ 1` within a second. B clicks the chip again: it disappears for both. Spam-click reactions: after about 30 in a minute you get "Slow down".
+- [ ] **Poll:** A → **+ → Poll**, 3 options, posts. B votes; A sees the percentages change live. B taps the same option again: the vote is removed. B taps another: the vote moves.
+- [ ] **Image:** A → **+ → Photo or GIF** (also try paste and drag-and-drop). The preview shows above the box; send with and without a caption. B sees it within a second; clicking opens the full-size viewer.
+- [ ] **Image privacy:** right-click the image → copy image address. It's a `…/object/sign/chat-images/…?token=…` link, not a public URL. After the message expires (or is deleted and you request a new link), Storage returns an error.
+- [ ] **Image metadata:** send a phone photo with location data, download it from the chat and check its details: there's no GPS info.
+- [ ] **Bad files:** a 6 MB GIF or a PDF is refused with a clear message.
+- [ ] **Delete:** A deletes their own message (trash icon → Delete). It disappears for both. B has no delete button on A's messages. A reply to the deleted message now says "Original message is no longer available".
+- [ ] **Cleanup:** an hour after sending an image, **Storage → chat-images** no longer has the file once `cleanup-images` has run (check its Logs).
+- [ ] **Old database:** with the new page against a database that hasn't been upgraded, plain messages still send and the **+**, reply, react and delete buttons are hidden.
+
+Run the database part locally with `tests/local-db/run.sh`; the `--- F` sections in `feature-tests.sql` cover these rules.

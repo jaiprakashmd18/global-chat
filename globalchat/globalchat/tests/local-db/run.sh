@@ -9,4 +9,5 @@ psql -q -c "drop database if exists $DB" -c "create database $DB"
 psql -q -v ON_ERROR_STOP=1 -d $DB -f stubs.sql
 psql -q -v ON_ERROR_STOP=1 -d $DB -f ../../schema.sql
 psql -d $DB -f security-tests.sql
+psql -d $DB -f feature-tests.sql
 echo "Compare the output with the expectations printed in each --- section."

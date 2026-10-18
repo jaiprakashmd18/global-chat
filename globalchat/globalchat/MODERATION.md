@@ -101,3 +101,19 @@ You can schedule this with pg_cron the same way as `globalchat-cleanup`.
 ## Urgent content
 
 For credible threats of violence, child sexual abuse material, or other content you may be legally required to act on: remove it immediately, preserve the report row, and follow the reporting obligations in your jurisdiction (for example, NCMEC in the US or the relevant national hotline elsewhere). Don't wait for the hourly expiry.
+
+## Images, polls, reactions and self-deletion
+
+- **Reported images.** `reports.reported_image_path` holds the storage path of a reported image. While the report is `open`, the image cleanup keeps the file, so you can view it in Dashboard → **Storage → chat-images**. Once you mark the report `actioned` or `dismissed`, the next cleanup run deletes the file.
+
+```sql
+select id, reason, reported_username, reported_content, reported_image_path
+from public.reports
+where status = 'open' and reported_image_path is not null
+order by created_at;
+```
+
+- **Removing a message** (`delete from public.messages where id = '...'`) also removes its reactions and votes, tells every open page to hide it, and leaves the image for the cleanup to delete. Anyone who already had the image open can keep seeing it until it would have expired.
+- **Self-deletion.** Guests can delete their own messages before they expire. A report that was already filed keeps its evidence snapshot, so deleting doesn't help someone escape a report.
+- **Who reacted or voted** is in `public.reactions` / `public.poll_votes` (with `user_id`), readable only from the SQL Editor. Use it to spot vote-stuffing, e.g. many sessions created at once voting the same way.
+- **Limits** for reactions/votes (30 per minute) and image uploads (10 per 10 minutes) are in `gc_setting()` at the top of `schema.sql`.

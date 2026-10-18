@@ -14,11 +14,22 @@ It's a static frontend (HTML, CSS, vanilla JS modules) on top of Supabase: anony
 - **Typing indicator**: "QuietFox_1937 is typing…" above the message box.
 - **@mentions**: click a name to mention them. Messages that mention you are highlighted, and you can turn on a sound and/or a desktop notification for mentions.
 - **Links**: `http(s)` URLs become safe links (`rel="noopener noreferrer nofollow ugc"`).
+- **Replies**: reply to a specific message; your message shows a quoted preview you can click to jump to the original. Replies to you count as mentions.
+- **Emoji reactions** (❤️ 👍 😂 😮 😢 🔥): counts update live for everyone. Nobody can see *who* reacted.
+- **Polls**: ask a question with 2–4 options; results update live and you can change or undo your vote. Votes are anonymous.
+- **Photos and GIFs**: attach, paste or drag in an image (PNG, JPG, WebP, GIF, up to 5 MB). Photos are resized and re-saved in the browser first, which strips hidden metadata like GPS location. Images are stored privately and disappear with their message.
+- **Delete your own message** at any time before it expires.
 - **Emoji picker**, **message search**, **copy message**, **unread count in the tab title**, and quick conversation starters when the room is empty.
 - **Fading messages**: messages fade slightly in their last five minutes before they disappear.
 - Keyboard: <kbd>/</kbd> focuses the message box, <kbd>Esc</kbd> closes search and the emoji picker.
 
-Presence and typing use the existing Realtime presence permission, so none of these features need database changes.
+Presence and typing use the existing Realtime presence permission. Replies, reactions, polls, images and deleting need the tables and functions in `schema.sql`, plus one Edge Function for image cleanup ([step 9b](#9b-image-cleanup-edge-function)). If the page is deployed before the database is upgraded, plain chat keeps working and those features stay hidden.
+
+### Upgrading an existing GlobalChat
+
+1. Dashboard → **SQL Editor** → paste all of `schema.sql` → **Run**. It's safe to re-run: new columns and tables are added in place and existing messages are kept. Look for the notice `storage bucket "chat-images" and policies ready`.
+2. Deploy the `cleanup-images` Edge Function and schedule it ([step 9b](#9b-image-cleanup-edge-function)).
+3. Redeploy the site (the security headers now allow images from `*.supabase.co`).
 
 ---
 
@@ -29,7 +40,7 @@ Presence and typing use the existing Realtime presence permission, so none of th
 3. [Setup: Supabase](#setup-supabase) (steps 1–5)
 4. [Setup: frontend and local run](#setup-frontend-and-local-run) (steps 6–7)
 5. [Deploy](#deploy) (step 8)
-6. [Scheduled expiry cleanup](#scheduled-expiry-cleanup) (step 9)
+6. [Scheduled expiry cleanup](#scheduled-expiry-cleanup) (step 9, including image cleanup)
 7. [Testing](#testing) (step 10)
 8. [Troubleshooting Supabase errors](#troubleshooting-supabase-errors) (step 11)
 9. [Before public launch: abuse prevention and moderation](#before-public-launch) (step 12)
@@ -53,14 +64,22 @@ Browser tab                                   Supabase
 3. select latest 100 messages ──────────────► Postgres: RLS returns only
                                                   unexpired rows, public columns
 
-4. insert { username, content } ────────────► BEFORE INSERT trigger:
+4. insert { username, content,  ────────────► BEFORE INSERT trigger:
+     kind, reply_to, image_path, poll_options }
                                                   sets user_id, timestamps, expiry,
                                                   normalises text, rate limits,
                                                   duplicate check, bans, name ownership
                                                AFTER INSERT trigger:
    ◄──────────── "message_created" broadcast ──  realtime.send(public fields only)
 
-5. pg_cron every 5 min ─────────────────────► delete expired rows
+5. upload image → Storage "chat-images" ──────► private bucket, own folder only,
+   (signed URLs to view)                          readable only while its message is live
+
+6. rpc gc_toggle_reaction / gc_vote / ────────► SECURITY DEFINER functions: check,
+   gc_delete_my_message                           rate-limit, broadcast new totals
+
+7. pg_cron every 5 min ─────────────────────► delete expired rows (+ reactions, votes)
+   Edge Function every 10 min ──────────────► delete images no live message uses
 ```
 
 Design decisions worth knowing:
@@ -69,6 +88,8 @@ Design decisions worth knowing:
 - **`user_id` is never readable through the API.** Column-level grants expose only the public columns.
 - **Display names are owned server-side.** The first message a guest sends claims their name; nobody else can post under it while the claim is active, and a guest can't switch to someone else's name.
 - **All rules live in the database.** The browser's checks (counter, cooldown) only make the experience smoother.
+- **Reactions and votes are counted, not attributed.** Guests can't read the `reactions` or `poll_votes` tables; functions return totals plus the caller's own choices only.
+- **Images are private files.** The `chat-images` bucket isn't public. A guest can upload only into a folder named after their own session, and anyone can get a link to a file only while a live message points at it.
 
 ## Project files
 
@@ -79,12 +100,13 @@ Design decisions worth knowing:
 | `theme.js` | Applies the saved theme before first paint; stores appearance and alert preferences |
 | `app.js` | Auth, realtime, presence, typing, messaging, mentions, search, expiry, reporting |
 | `config.js` | **Your** Supabase URL and public key (placeholders until you edit it) |
-| `schema.sql` | Complete database migration (run once) |
+| `schema.sql` | Complete database migration (run once; re-run to upgrade) |
+| `supabase/functions/cleanup-images/` | Edge Function that deletes images of expired or deleted messages |
 | `favicon.svg`, `fonts/` | Brand mark and self-hosted fonts (OFL licensed) |
 | `vercel.json`, `_headers` | Security headers (CSP etc.) for Vercel / Cloudflare Pages |
 | `MODERATION.md` | Moderation workflow and SQL snippets |
 | `TESTING.md` | Test checklist |
-| `tests/local-db/` | Optional: run the migration + security tests against local Postgres |
+| `tests/local-db/` | Optional: run the migration + security and feature tests against local Postgres |
 
 ---
 
@@ -217,6 +239,19 @@ from cron.job_run_details order by start_time desc limit 5;
 
 Or use Dashboard → **Integrations → Cron** (if your dashboard shows it).
 
+### 9b. Image cleanup (Edge Function)
+
+Supabase doesn't let SQL delete Storage files, so images are removed by a small Edge Function, `supabase/functions/cleanup-images`. It asks the database (`gc_dead_images()`) for files older than five minutes that no live message uses, skips files that are evidence for an open report, and deletes them. Until it runs, expired images can't be viewed anyway (the storage policy refuses), but they still take up space.
+
+**Deploy it**, either way:
+
+- **Dashboard:** **Edge Functions → Deploy a new function → Via Editor**, name it `cleanup-images`, paste the contents of `supabase/functions/cleanup-images/index.ts`, and deploy.
+- **CLI:** `supabase functions deploy cleanup-images --project-ref <project-ref>`
+
+**Schedule it** every 10 minutes: Dashboard → **Integrations → Cron → Create job** → type **Supabase Edge Function** → `cleanup-images`, method `POST`, schedule `*/10 * * * *`.
+
+Check it worked: **Edge Functions → cleanup-images → Logs** shows `{"removed": N}` responses. The function uses the service-role key that Supabase injects into Edge Functions automatically; never put that key anywhere else. Calling it is harmless (it only removes files nobody can view any more), so it's fine that it accepts any valid project key.
+
 ### Scheduled cleanup without pg_cron
 
 If `pg_cron` isn't available, run `select public.gc_cleanup();` on a schedule from a trusted backend that holds a database connection string as a secret. A simple option is a GitHub Actions workflow in a **private** repository:
@@ -314,5 +349,7 @@ Nothing here has been deployed or connected to a live Supabase project yet. You 
 - Other visitors see only random names, message text, and times, plus each open tab's random name in the online list and a typing hint while someone writes. IP addresses, emails, and internal IDs are never shown, and `user_id` isn't readable through the API.
 - GlobalChat isn't fully anonymous. Supabase and your host process IP addresses and request logs to operate and secure the service.
 - Expiry hides messages after one hour and cleanup deletes them within about five minutes after that. It does **not** guarantee removal from database backups, provider logs, or screenshots and copies other people made.
-- Reported messages are copied into `reports` as evidence and kept until a moderator deletes the report.
+- Reported messages are copied into `reports` as evidence and kept until a moderator deletes the report. For a reported image, the file is kept while the report is `open`, then removed by the image cleanup.
+- Images: a signed link someone already opened keeps working until that message would have expired, even if the message is deleted early. Anyone in the room can also save an image while it's up.
+- Reactions and poll votes are stored with the guest's session id (so each person counts once) but are never shown to other guests, and they're deleted with the message.
 - Live delivery is best-effort: if a tab is disconnected for a while, it reloads the latest 100 messages on reconnect, so a very busy room can leave a gap.

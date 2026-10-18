@@ -116,7 +116,8 @@
 
       <div class="conn-banner" id="conn-banner" hidden></div>
 
-      <div class="feed-wrap">
+      <div class="feed-wrap" id="feed-wrap">
+        <div class="drop-hint" id="drop-hint" hidden><p>Drop an image to share it</p></div>
         <div class="feed" id="feed" tabindex="0" aria-label="Messages">
           <div class="feed-state" id="feed-state" aria-live="polite"></div>
           <ol class="message-list" id="message-list" role="log" aria-live="polite" aria-relevant="additions"></ol>
@@ -137,9 +138,42 @@
 
       <form class="composer" id="composer" autocomplete="off" novalidate>
         <p class="typing" id="typing" aria-live="polite"></p>
+
+        <div class="composer-context" id="reply-bar" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v5"/></svg>
+          <p><span class="context-label">Replying to <strong id="reply-name"></strong></span><span class="context-text" id="reply-text"></span></p>
+          <button type="button" class="icon-button icon-button-sm" id="reply-cancel" aria-label="Cancel reply">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
+
+        <div class="composer-context" id="image-bar" hidden>
+          <img class="image-thumb" id="image-thumb" alt="">
+          <p><span class="context-label" id="image-name">Image</span><span class="context-text" id="image-meta"></span></p>
+          <button type="button" class="icon-button icon-button-sm" id="image-cancel" aria-label="Remove image">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
+
         <label class="visually-hidden" for="composer-input">Message everyone</label>
         <div class="composer-box">
-          <div class="emoji-wrap">
+          <div class="popover-wrap needs-v2">
+            <button type="button" class="composer-tool" id="attach-toggle" aria-label="Add a photo, GIF or poll" aria-expanded="false" aria-controls="attach-menu">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+            <div class="attach-menu" id="attach-menu" hidden>
+              <button type="button" id="attach-image">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
+                Photo or GIF
+              </button>
+              <button type="button" id="attach-poll">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>
+                Poll
+              </button>
+            </div>
+            <input type="file" id="image-input" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+          </div>
+          <div class="popover-wrap emoji-wrap">
             <button type="button" class="composer-tool" id="emoji-toggle" aria-label="Insert emoji" aria-expanded="false" aria-controls="emoji-panel">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01"/></svg>
             </button>
@@ -281,6 +315,12 @@
       <h3>What we and our providers process</h3>
       <p>GlobalChat isn't fully anonymous. To run and protect the service, our hosting and database providers process technical data such as IP addresses, request logs, and an anonymous session ID. This is used for security, rate limiting, and abuse prevention, not to show your identity to others.</p>
 
+      <h3>Photos and GIFs</h3>
+      <p>Images you share are visible only while their message is, and are deleted from storage shortly after it expires or is deleted. Photos are re-saved in your browser before upload, which removes hidden details such as location data. GIFs are uploaded as they are.</p>
+
+      <h3>Reactions and polls</h3>
+      <p>Everyone sees how many people reacted or voted, never who.</p>
+
       <h3>Reports</h3>
       <p>When you report a message, a copy of it is kept for moderators even after it disappears from the room, so they can review it. Reports are visible only to moderators.</p>
 
@@ -291,6 +331,54 @@
         <button type="button" class="button button-primary" data-close-dialog>Got it</button>
       </div>
     </div>
+  </dialog>
+
+  <!-- Reaction picker (positioned next to the message's React button) -->
+  <div class="reaction-picker" id="reaction-picker" role="group" aria-label="Choose a reaction" hidden></div>
+
+  <!-- Poll composer -->
+  <dialog class="dialog" id="poll-dialog" aria-labelledby="poll-title">
+    <form class="dialog-body" id="poll-form" novalidate>
+      <h2 class="dialog-title" id="poll-title">Ask the room</h2>
+      <label class="field-label" for="poll-question">Question</label>
+      <input class="field field-line" id="poll-question" maxlength="200" placeholder="What should we talk about?" required>
+      <fieldset class="setting">
+        <legend>Options <span class="optional">2 to 4</span></legend>
+        <div class="poll-options" id="poll-options"></div>
+        <button type="button" class="button button-quiet button-sm poll-add" id="poll-add">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          Add option
+        </button>
+      </fieldset>
+      <p class="composer-error" id="poll-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="button button-quiet" data-close-dialog>Cancel</button>
+        <button type="submit" class="button button-primary" id="poll-submit">Post poll</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Delete confirmation -->
+  <dialog class="dialog dialog-sm" id="delete-dialog" aria-labelledby="delete-title">
+    <div class="dialog-body">
+      <h2 class="dialog-title" id="delete-title">Delete this message?</h2>
+      <p class="dialog-sub">It disappears for everyone. People may already have seen it.</p>
+      <div class="dialog-actions">
+        <button type="button" class="button button-quiet" data-close-dialog>Cancel</button>
+        <button type="button" class="button button-danger" id="delete-confirm">Delete</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Image viewer -->
+  <dialog class="lightbox" id="lightbox" aria-label="Image">
+    <figure>
+      <img id="lightbox-img" alt="">
+      <figcaption id="lightbox-caption"></figcaption>
+    </figure>
+    <button type="button" class="icon-button lightbox-close" data-close-dialog aria-label="Close image">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
   </dialog>
 
   <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
@@ -306,12 +394,28 @@
           <time class="msg-time"></time>
         </div>
         <div class="msg-bubble">
+          <button type="button" class="msg-quote" hidden>
+            <span class="msg-quote-name"></span>
+            <span class="msg-quote-text"></span>
+          </button>
+          <button type="button" class="msg-image" hidden aria-label="Open image"><img alt="" decoding="async"></button>
           <p class="msg-text"></p>
+          <div class="poll" hidden></div>
         </div>
+        <div class="msg-reactions" hidden></div>
       </div>
       <div class="msg-actions">
+        <button type="button" class="msg-action msg-reply needs-v2" aria-label="Reply" title="Reply">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v5"/></svg>
+        </button>
+        <button type="button" class="msg-action msg-react needs-v2" aria-label="Add reaction" title="React">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01"/></svg>
+        </button>
         <button type="button" class="msg-action msg-copy" aria-label="Copy message" title="Copy">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
+        </button>
+        <button type="button" class="msg-action msg-delete needs-v2" aria-label="Delete your message" title="Delete" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
         </button>
         <button type="button" class="msg-action msg-report" title="Report" hidden>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>
