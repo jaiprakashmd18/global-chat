@@ -47,11 +47,88 @@ const JOIN_NOTE_AFTER_MS = 5000;    // ignore presence flicker right after joini
 
 const STARTERS = ['Hello from somewhere 👋', 'What time is it where you are?', 'What are you listening to right now?'];
 
-// Links and @mentions inside message text. Usernames follow the server rule.
-const RICH_TOKEN = /(https?:\/\/[^\s<>"']+)|@([A-Za-z]{2,20}_[0-9]{4})\b/g;
+// Links, @mentions and formatting inside message text. Groups:
+//   1 link  2 @mention  3 `code`  4 ||spoiler||  5 *bold*  6 _italic_
+// Usernames follow the server rule. Bold/italic need non-word characters
+// around them, so snake_case and 2*3*4 stay as typed.
+const RICH_TOKEN = /(https?:\/\/[^\s<>"']+)|@([A-Za-z]{2,20}_[0-9]{4})\b|`([^`\n]+)`|\|\|([^|\n]+?)\|\||(?<![\w*])\*([^*\n]+?)\*(?![\w*])|(?<![\w_])_([^_\n]+?)_(?![\w_])/g;
 
-const SELECT_COLUMNS = 'id, username, content, created_at, expires_at, kind, reply_to, image_path, poll_options';
-const LEGACY_COLUMNS = 'id, username, content, created_at, expires_at';  // before schema upgrade
+// Columns by database version, newest first. The page detects which one the
+// database has and switches off what it can't support (see setTier()).
+const TIER_COLUMNS = {
+  3: 'id, username, content, created_at, expires_at, kind, reply_to, image_path, poll_options, is_bot, command, sticker, country, edited_at',
+  2: 'id, username, content, created_at, expires_at, kind, reply_to, image_path, poll_options',
+  1: 'id, username, content, created_at, expires_at',
+};
+
+const STICKERS = [
+  ['hi', 'Hi!'], ['gg', 'GG'], ['lol', 'LOL'], ['love', 'Love'],
+  ['gn', 'Good night'], ['brb', 'Be right back'], ['wow', 'Wow'], ['thanks', 'Thanks'],
+];  // keep in sync with gc_sticker_ids() in schema.sql and /stickers/*.svg
+const VOICE_MAX_MS = 30_000;
+const VOICE_TYPES = [
+  ['audio/webm;codecs=opus', 'audio/webm', 'webm'],
+  ['audio/ogg;codecs=opus', 'audio/ogg', 'ogg'],
+  ['audio/mp4', 'audio/mp4', 'm4a'],
+];
+const EDIT_WINDOW_MS = 120_000;     // keep in sync with edit_window_seconds
+const ROOM_STATE_REFRESH_MS = 5 * 60_000;
+const DRAFT_KEY = 'globalchat.draft';
+const CONFETTI_WORDS = /\b(happy\s+birthday|hbd|congrats|congratulations|congratz)\b|🎉|🥳|🎂/i;
+const SHARE_TEXT = 'Come chat with the world on GlobalChat: no sign-up, messages vanish after an hour.';
+
+// ISO 3166 country codes for the optional flag (names come from the browser).
+const COUNTRY_CODES = ('AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS '
+  + 'BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI '
+  + 'FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR '
+  + 'IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM '
+  + 'MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT '
+  + 'PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM '
+  + 'TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS XK YE YT ZA ZM ZW').split(' ');
+
+// Word of the day: one per day, same for everyone (by UTC date).
+const WORDS = [
+  ['Saudade', 'Portuguese', 'A deep, bittersweet longing for someone or something you love that is far away.'],
+  ['Hygge', 'Danish', 'A cosy feeling of warmth, comfort and contentment, often with good company.'],
+  ['Ubuntu', 'Zulu / Xhosa', '“I am because we are”: the idea that we are human through our kindness to others.'],
+  ['Wabi-sabi', 'Japanese', 'Finding beauty in things that are imperfect, simple and impermanent.'],
+  ['Fernweh', 'German', 'An ache to be somewhere far away; the opposite of homesickness.'],
+  ['Sobremesa', 'Spanish', 'The time spent chatting at the table after a meal is finished.'],
+  ['Jugaad', 'Hindi', 'A clever, improvised fix that gets the job done with whatever is at hand.'],
+  ['Komorebi', 'Japanese', 'Sunlight filtering through the leaves of trees.'],
+  ['Lagom', 'Swedish', 'Just the right amount: not too much, not too little.'],
+  ['Hiraeth', 'Welsh', 'Homesickness for a home you can’t return to, or that maybe never was.'],
+  ['Gezellig', 'Dutch', 'Cosy, friendly and pleasant, especially when spending time with others.'],
+  ['Tsundoku', 'Japanese', 'Buying books and letting them pile up without reading them.'],
+  ['Meraki', 'Greek', 'Putting your soul, creativity and love into what you do.'],
+  ['Sisu', 'Finnish', 'Extraordinary determination and courage when things get hard.'],
+  ['Ikigai', 'Japanese', 'Your reason for being: the thing that makes getting up worthwhile.'],
+  ['Hakuna matata', 'Swahili', 'No worries.'],
+  ['Dolce far niente', 'Italian', 'The sweetness of doing nothing.'],
+  ['Joie de vivre', 'French', 'A cheerful enjoyment of life.'],
+  ['Wanderlust', 'German', 'A strong desire to travel and explore the world.'],
+  ['Petrichor', 'English', 'The earthy smell in the air after rain falls on dry ground.'],
+  ['Serendipity', 'English', 'Finding something good by happy accident.'],
+  ['Kilig', 'Tagalog', 'The butterflies-in-your-stomach rush of romantic excitement.'],
+  ['Gigil', 'Tagalog', 'The urge to squeeze something that is unbearably cute.'],
+  ['Jayus', 'Indonesian', 'A joke told so badly that you can’t help laughing.'],
+  ['Pochemuchka', 'Russian', 'A person who asks a lot of questions.'],
+  ['Cafuné', 'Brazilian Portuguese', 'Tenderly running your fingers through someone’s hair.'],
+  ['Friluftsliv', 'Norwegian', '“Open-air life”: spending time outdoors for your wellbeing.'],
+  ['Shemomedjamo', 'Georgian', 'Eating past being full because the food is just that good.'],
+  ['Waldeinsamkeit', 'German', 'The peaceful feeling of being alone in the woods.'],
+  ['Mångata', 'Swedish', 'The road-like reflection of the moon on water.'],
+  ['Sankofa', 'Akan (Twi)', '“Go back and get it”: learning from the past to build the future.'],
+  ['Dépaysement', 'French', 'The feeling of being somewhere new and unfamiliar.'],
+  ['Nunchi', 'Korean', 'The quiet art of sensing how others feel.'],
+  ['Jeong', 'Korean', 'A deep bond of affection that grows over time.'],
+  ['Ailyak', 'Bulgarian', 'Doing things slowly and calmly, enjoying the moment.'],
+  ['Hanami', 'Japanese', 'Gathering to enjoy the cherry blossoms.'],
+  ['Kaapi', 'Tamil', 'South Indian filter coffee, frothy and strong.'],
+  ['Pura vida', 'Spanish (Costa Rica)', '“Pure life”: a way of saying hello, goodbye, and that life is good.'],
+  ['Sawubona', 'Zulu', 'A greeting meaning “I see you”: I value you and your presence.'],
+  ['Ohana', 'Hawaiian', 'Family, including the friends you choose as family.'],
+];
 
 const REACTIONS = ['❤️', '👍', '😂', '😮', '😢', '🔥'];   // keep in sync with schema.sql
 const IMAGE_BUCKET = 'chat-images';
@@ -138,6 +215,38 @@ const el = {
   lightbox: $('lightbox'),
   lightboxImg: $('lightbox-img'),
   lightboxCaption: $('lightbox-caption'),
+  sideFlag: $('side-flag'),
+  shareButton: $('share-button'),
+  pinBar: $('pin-bar'),
+  pinName: $('pin-name'),
+  pinContent: $('pin-content'),
+  slowBar: $('slow-bar'),
+  slowSeconds: $('slow-seconds'),
+  editBar: $('edit-bar'),
+  editText: $('edit-text'),
+  editCancel: $('edit-cancel'),
+  voiceBar: $('voice-bar'),
+  voiceLabel: $('voice-label'),
+  voiceTime: $('voice-time'),
+  voicePreview: $('voice-preview'),
+  voiceStop: $('voice-stop'),
+  voiceSend: $('voice-send'),
+  voiceCancel: $('voice-cancel'),
+  commandHint: $('command-hint'),
+  attachSticker: $('attach-sticker'),
+  attachVoice: $('attach-voice'),
+  stickerPanel: $('sticker-panel'),
+  moreMenu: $('more-menu'),
+  renameDialog: $('rename-dialog'),
+  renameForm: $('rename-form'),
+  renameInput: $('rename-input'),
+  renameDigits: $('rename-digits'),
+  renameError: $('rename-error'),
+  renameSubmit: $('rename-submit'),
+  countrySelect: $('country-select'),
+  mutedList: $('muted-list'),
+  mutedEmpty: $('muted-empty'),
+  confetti: $('confetti'),
   toasts: $('toasts'),
   captcha: $('captcha'),
   template: $('message-template'),
@@ -173,9 +282,17 @@ const state = {
   filter: '',
   titleUnread: 0,
   titleMention: false,
-  prefs: window.GlobalChatPrefs?.load() ?? { theme: 'dark', accent: 'violet', density: 'comfortable', sound: false, notify: false },
+  prefs: window.GlobalChatPrefs?.load()
+    ?? { theme: 'dark', accent: 'violet', density: 'comfortable', sound: false, notify: false, soundAll: false, country: '', muted: [] },
   audio: null,
   legacy: false,                 // database not yet upgraded: hide new features
+  tier: 3,                       // database version detected (3 = everything)
+  myNames: new Map(),            // names this tab used -> ms they stopped being ours (null = current)
+  roomState: null,               // pin, slow mode, question of the day, stats
+  editing: null,                 // id of the message being edited
+  recorder: null,                // { rec, stream, chunks, timer, startedAt, blob, url, type, ext, path }
+  confettiAt: 0,
+  audioTick: 0,
   replyTo: null,                 // id of the message being replied to
   pendingImage: null,            // { blob, type, ext, url, path? } waiting to send
   signedUrls: new Map(),         // image path -> { url, until }
@@ -242,7 +359,18 @@ function loadOrCreateUsername(userId) {
   return fresh;
 }
 
+// Messages are "mine" if they use a name this tab has used, from before it
+// stopped being ours (a released name could later be claimed by someone else).
+function isMine(m) {
+  if (!m || m.is_bot) return false;
+  if (!state.myNames.has(m.username)) return false;
+  const until = state.myNames.get(m.username);
+  return until === null || createdMs(m) <= until;
+}
+
 function setUsername(name) {
+  if (state.username && state.username !== name) state.myNames.set(state.username, Date.now() + 5000);
+  state.myNames.set(name, null);
   state.username = name;
   if (state.session) sessionStorage.setItem(usernameKey(state.session.user.id), name);
   el.sideUsername.textContent = name;
@@ -250,7 +378,7 @@ function setUsername(name) {
   paintAvatar(el.sideAvatar, name);
   // Re-mark own messages (e.g. after the server confirmed a different name).
   for (const { data, node } of state.messages.values()) {
-    applyMine(node, data.username === name);
+    applyMine(node, isMine(data), data);
     node.classList.toggle('is-mention', isForMe(data));
   }
   trackPresence();
@@ -281,6 +409,10 @@ function isConfigured() {
 
 async function boot() {
   wireUI();
+  // Installable app + offline shell (sw.js). Never caches chat data.
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+    navigator.serviceWorker.register('sw.js').catch((err) => console.info('[GlobalChat] no service worker', err));
+  }
 
   if (!isConfigured()) {
     setConnection('error', 'Not configured');
@@ -489,6 +621,11 @@ function subscribeChannel() {
       const p = msg?.payload;
       if (typeof p?.id === 'string' && Array.isArray(p.counts)) applyPoll(p.id, p.counts);
     })
+    .on('broadcast', { event: 'message_edited' }, (msg) => {
+      const p = msg?.payload;
+      if (typeof p?.id === 'string' && typeof p.content === 'string') applyEdit(p.id, p.content, p.edited_at);
+    })
+    .on('broadcast', { event: 'room_state' }, (msg) => applyRoomState(msg?.payload))
     .on('presence', { event: 'sync' }, () => {
       if (channel !== state.channel) return;
       syncPeople(channel.presenceState());
@@ -538,8 +675,8 @@ async function loadHistory({ backfill = false } = {}) {
     .order('created_at', { ascending: false })
     .limit(HISTORY_LIMIT);
 
-  if (error && !state.legacy && isMissingColumn(error)) {
-    enableLegacy();
+  if (error && state.tier > 1 && isMissingColumn(error)) {
+    setTier(state.tier - 1);
     return loadHistory({ backfill });
   }
   if (error) {
@@ -557,21 +694,29 @@ async function loadHistory({ backfill = false } = {}) {
   upsertMessages(batch, { initial });
   updateFeedState();
   loadExtras([...state.messages.keys()]);
+  if (!backfill) loadRoomState();
 }
 
-const columns = () => (state.legacy ? LEGACY_COLUMNS : SELECT_COLUMNS);
+const columns = () => TIER_COLUMNS[state.tier];
 
 function isMissingColumn(error) {
   return error?.code === '42703' || /column .* does not exist/i.test(error?.message ?? '');
 }
 
-// The page is newer than the database: keep plain chat working and hide
-// replies, images, polls, reactions and delete until schema.sql is re-run.
-function enableLegacy() {
-  state.legacy = true;
-  el.app.dataset.features = 'legacy';
-  document.getElementById('setup-notice').hidden = false;
-  console.warn('[GlobalChat] The database uses the original schema. Re-run schema.sql to enable replies, images, polls, reactions and deleting messages.');
+// The page is newer than the database: keep what works and hide the rest
+// until schema.sql is re-run. Tier 1 = original chat only, 2 = replies,
+// photos, polls, reactions, delete; 3 = everything.
+function setTier(tier) {
+  state.tier = tier;
+  state.legacy = tier === 1;
+  document.documentElement.dataset.features = tier === 1 ? 'legacy' : tier === 2 ? 'v2' : '';
+  document.getElementById('setup-notice').hidden = tier === 3;
+  document.getElementById('setup-notice-title').textContent = tier === 1
+    ? 'Photos, polls, replies and reactions are switched off'
+    : 'Stickers, voice notes, editing, flags, trivia and room stats are switched off';
+  console.warn(`[GlobalChat] Database features: tier ${tier} of 3. Re-run schema.sql to enable everything.`);
+  renderIdentityFlag();
+  renderCountries();
 }
 
 function queueLive(data) {
@@ -598,7 +743,11 @@ function isValidMessage(m) {
   if (!base) return false;
   m.kind ??= 'text';
   if (typeof m.reply_to !== 'string') m.reply_to = null;
-  if (m.kind === 'image') return typeof m.image_path === 'string';
+  m.is_bot = m.is_bot === true;
+  if (typeof m.country !== 'string' || !/^[A-Z]{2}$/.test(m.country)) m.country = null;
+  if (!['roll', 'flip', '8ball'].includes(m.command)) m.command = null;
+  if (m.kind === 'image' || m.kind === 'voice') return typeof m.image_path === 'string';
+  if (m.kind === 'sticker') return STICKERS.some(([id]) => id === m.sticker);
   if (m.kind === 'poll') {
     return Array.isArray(m.poll_options) && m.poll_options.length >= 2
       && m.poll_options.every((o) => typeof o === 'string');
@@ -622,7 +771,7 @@ function upsertMessages(list, { initial }) {
   fresh.sort((a, b) => createdMs(a) - createdMs(b));
 
   const stick = initial || isNearBottom();
-  const includesMine = fresh.some((m) => m.username === state.username);
+  const includesMine = fresh.some(isMine);
 
   for (const m of fresh) insertMessage(m);
   if (stick || includesMine) trimOverflow();
@@ -637,65 +786,109 @@ function upsertMessages(list, { initial }) {
   }
   if (!initial) {
     pulseBrand();
-    noteUnread(fresh.filter((m) => m.username !== state.username).length, mentions);
+    const others = fresh.filter((m) => !isMine(m) && !isMutedMsg(m));
+    noteUnread(others.length, mentions);
+    if (others.length && state.prefs.soundAll && !(mentions.length && state.prefs.sound)) playTick();
+    maybeConfetti(fresh);
   }
   if (state.filter) applyFilter();
 }
 
+const displayName = (m) => (m.is_bot ? BOT_NAME : m.username);
+
 function buildNode(m) {
   const node = el.template.content.firstElementChild.cloneNode(true);
-  const created = new Date(m.created_at);
-  const expires = new Date(m.expires_at);
 
   node.dataset.id = m.id;
   node.dataset.time = String(createdMs(m));
   const hue = String(hueFor(m.username));
-  paintAvatar(node.querySelector('.avatar'), m.username);
+  const avatar = node.querySelector('.avatar');
   const name = node.querySelector('.msg-name');
-  name.textContent = m.username;
-  name.style.setProperty('--hue', hue);
-  name.title = `Mention ${m.username}`;
-  name.addEventListener('click', () => insertMention(m.username));
+  name.textContent = displayName(m);
+  if (m.is_bot) {
+    avatar.textContent = '🤖';
+    avatar.classList.add('avatar-bot');
+    node.classList.add('is-server-bot');
+    name.title = 'Automatic messages from GlobalChat';
+    name.disabled = true;
+  } else {
+    paintAvatar(avatar, m.username);
+    name.style.setProperty('--hue', hue);
+    name.title = `Mention ${m.username}`;
+    name.addEventListener('click', () => insertMention(m.username));
+  }
+  const flag = node.querySelector('.msg-flag');
+  if (m.country) {
+    flag.hidden = false;
+    flag.textContent = flagEmoji(m.country);
+    flag.title = countryName(m.country);
+  }
+  const badge = node.querySelector('.msg-badge');
+  if (m.is_bot || m.command) {
+    badge.hidden = false;
+    badge.textContent = m.is_bot ? 'bot' : `/${m.command}`;
+    badge.title = m.is_bot ? 'Automatic message' : 'Result picked by the server, so it can’t be faked';
+  }
+  node.classList.toggle('is-command', Boolean(m.command));
   renderRichText(node.querySelector('.msg-text'), m.content);  // safe: text nodes only
+  renderTime(node, m);
+  renderEdited(node, m);
 
-  const time = node.querySelector('.msg-time');
-  time.dateTime = created.toISOString();
-  time.textContent = state.timeFormat.format(created);
-  time.title = `${state.fullFormat.format(created)}. Disappears at ${state.timeFormat.format(expires)}.`;
-
-  node.querySelector('.msg-report').addEventListener('click', () => openReport(m.id));
-  const copy = node.querySelector('.msg-copy');
-  copy.hidden = !m.content;
-  copy.addEventListener('click', () => copyMessage(m.content));
   node.querySelector('.msg-reply').addEventListener('click', () => startReply(m.id));
   node.querySelector('.msg-react').addEventListener('click', (e) => openReactionPicker(m.id, e.currentTarget));
-  node.querySelector('.msg-delete').addEventListener('click', () => openDelete(m.id));
+  node.querySelector('.msg-edit').addEventListener('click', () => startEdit(m.id));
+  node.querySelector('.msg-more').addEventListener('click', (e) => openMoreMenu(m.id, e.currentTarget));
   node.querySelector('.msg-quote').addEventListener('click', () => scrollToMessage(m.reply_to));
+  node.querySelector('.msg-unmute-once').addEventListener('click', () => node.classList.add('is-unmuted'));
 
   if (m.kind === 'image') renderImage(node, m);
+  if (m.kind === 'sticker') renderSticker(node, m);
+  if (m.kind === 'voice') renderVoice(node, m);
   if (m.kind === 'poll') {
-    const badge = document.createElement('span');
-    badge.className = 'poll-badge';
-    badge.textContent = '📊 Poll';
-    node.querySelector('.msg-text').before(badge);
+    const pollBadge = document.createElement('span');
+    pollBadge.className = 'poll-badge';
+    pollBadge.textContent = '📊 Poll';
+    node.querySelector('.msg-text').before(pollBadge);
     renderPoll(node, m);
   }
   renderQuote(node, m);
   renderReactions(node, m);
 
-  applyMine(node, m.username === state.username);
+  applyMine(node, isMine(m), m);
+  node.classList.toggle('is-muted', isMutedMsg(m));
   node.classList.toggle('is-mention', isForMe(m));
   node.classList.toggle('is-fading', isFading(m));
   return node;
 }
 
-function applyMine(node, mine) {
+function applyMine(node, mine, m) {
   node.classList.toggle('is-mine', mine);
   node.querySelector('.msg-you').hidden = !mine;
-  const report = node.querySelector('.msg-report');
-  report.hidden = mine;
-  report.setAttribute('aria-label', `Report message from ${node.querySelector('.msg-name').textContent}`);
-  node.querySelector('.msg-delete').hidden = !mine;
+  node.querySelector('.msg-edit').hidden = !(mine && isEditable(m));
+}
+
+const isEditable = (m) => state.tier >= 3 && m.kind === 'text' && !m.command && !m.is_bot
+  && Date.now() - createdMs(m) < EDIT_WINDOW_MS - 3000;
+
+// "now" / "5m ago", plus a countdown in a message's last 10 minutes.
+function renderTime(node, m) {
+  const created = createdMs(m);
+  const expires = Date.parse(m.expires_at);
+  const time = node.querySelector('.msg-time');
+  const ago = Math.max(0, Date.now() - created);
+  time.dateTime = new Date(created).toISOString();
+  time.textContent = ago < 45_000 ? 'now' : ago < 3_600_000 ? `${Math.round(ago / 60_000)}m ago` : state.timeFormat.format(created);
+  time.title = `${state.fullFormat.format(created)}. Disappears at ${state.timeFormat.format(expires)}.`;
+  const left = node.querySelector('.msg-left');
+  const leftMs = expires - Date.now();
+  left.hidden = leftMs > 10 * 60_000;
+  if (!left.hidden) left.textContent = `⏳ ${Math.max(1, Math.ceil(leftMs / 60_000))}m left`;
+}
+
+function renderEdited(node, m) {
+  const edited = node.querySelector('.msg-edited');
+  edited.hidden = !m.edited_at;
+  if (m.edited_at) edited.title = `Edited ${state.fullFormat.format(new Date(m.edited_at))}`;
 }
 
 function insertMessage(m) {
@@ -778,8 +971,10 @@ function trimOverflow() {
 function startExpirySweep() {
   const sweep = () => {
     for (const [id, { data, node }] of state.messages) {
-      if (isExpired(data)) removeMessage(id);
-      else node.classList.toggle('is-fading', isFading(data));
+      if (isExpired(data)) { removeMessage(id); continue; }
+      node.classList.toggle('is-fading', isFading(data));
+      renderTime(node, data);
+      applyMine(node, isMine(data), data);
     }
   };
   setInterval(sweep, EXPIRY_SWEEP_MS);
@@ -859,6 +1054,7 @@ function renderOnline(n) {
     el.peopleDialogSub.textContent = 'Counting people online…';
     state.people = [];
     renderPeople();
+    renderCountries();
     renderTyping();
     return;
   }
@@ -1021,7 +1217,7 @@ function clientCooldownCheck() {
   return true;
 }
 
-function startCooldown(until) {
+function startCooldown(until, label = (left) => `You're sending fast. You can send again in ${left}s.`) {
   state.cooldownUntil = Math.max(state.cooldownUntil, until);
   clearInterval(state.cooldownTimer);
   const tick = () => {
@@ -1032,7 +1228,7 @@ function startCooldown(until) {
       updateComposer();
       return;
     }
-    showComposerError(`You're sending fast. You can send again in ${left}s.`);
+    showComposerError(label(left));
     updateComposer();
   };
   tick();
@@ -1041,6 +1237,7 @@ function startCooldown(until) {
 
 async function sendMessage({ retried = false } = {}) {
   if (state.sending || el.input.disabled) return;
+  if (state.editing) { await saveEdit(); return; }
   const raw = el.input.value;
   const text = normalizeText(raw);
   const n = charCount(text);
@@ -1058,8 +1255,7 @@ async function sendMessage({ retried = false } = {}) {
   try {
     // Only send the new columns when used, so plain messages keep working
     // against a database that hasn't been upgraded yet.
-    const row = { username: state.username, content: text };
-    if (state.replyTo) row.reply_to = state.replyTo;
+    const row = baseRow(text);
     if (image) {
       row.kind = 'image';
       row.image_path = await uploadImage(image);
@@ -1068,7 +1264,7 @@ async function sendMessage({ retried = false } = {}) {
 
     state.sendTimes.push(Date.now());
     // Only clear if the user didn't keep typing while we were sending.
-    if (el.input.value === raw) el.input.value = '';
+    if (el.input.value === raw) { el.input.value = ''; saveDraft(); }
     autosize();
     setTyping(false);
     cancelReply();
@@ -1083,6 +1279,14 @@ async function sendMessage({ retried = false } = {}) {
   }
 }
 
+// Columns every new message carries (only those this database version has).
+function baseRow(content) {
+  const row = { username: state.username, content };
+  if (state.replyTo && state.tier >= 2) row.reply_to = state.replyTo;
+  if (state.prefs.country && state.tier >= 3) row.country = state.prefs.country;
+  return row;
+}
+
 async function postRow(row) {
   const { data, error } = await state.sb.from('messages').insert(row).select(columns()).single();
   if (error) throw error;
@@ -1090,11 +1294,15 @@ async function postRow(row) {
 }
 
 function afterPosted(data) {
-  if (data.username !== state.username) setUsername(data.username);
+  if (data.username !== state.username && !data.is_bot) setUsername(data.username);
   upsertMessages([data], { initial: false });
   scrollToBottom();
   maybeBotReply();
+  const slow = state.roomState?.slow_mode_seconds ?? 0;
+  if (slow > 0) startCooldown(Date.now() + slow * 1000, slowLabel);
 }
+
+const slowLabel = (left) => `🐢 Slow mode: you can send again in ${left}s.`;
 
 async function handleSendError(err, retried) {
   const msg = String(err?.message ?? '');
@@ -1127,6 +1335,12 @@ async function handleSendError(err, retried) {
       return 'The message you replied to is gone. Your message is still here; send it again.';
     }],
     ['INVALID_IMAGE', () => { clearPendingImage(); return 'That image couldn’t be sent. Try attaching it again.'; }],
+    ['SLOW_MODE', () => {
+      const secs = Number(/(\d+) seconds/.exec(err?.hint ?? '')?.[1]) || state.roomState?.slow_mode_seconds || 10;
+      startCooldown(Date.now() + secs * 1000, slowLabel);
+      loadRoomState();
+      return null;
+    }],
     ['UPLOAD_FAILED', () => uploadErrorText(msg)],
   ];
   for (const [code, out] of map) {
@@ -1209,7 +1423,7 @@ function renderRichText(target, text) {
   target.replaceChildren();
   let last = 0;
   for (const match of text.matchAll(RICH_TOKEN)) {
-    const [whole, rawUrl, mention] = match;
+    const [whole, rawUrl, mention, code, spoiler, bold, italic] = match;
     let token = whole;
     if (rawUrl) {
       // Leave trailing punctuation ("see https://x.com.") outside the link.
@@ -1218,12 +1432,36 @@ function renderRichText(target, text) {
     }
     if (match.index > last) target.append(text.slice(last, match.index));
     if (rawUrl) target.append(linkNode(token));
-    else {
+    else if (mention) {
       const span = document.createElement('span');
       span.className = 'mention';
-      span.classList.toggle('is-me', mention === state.username);
+      span.classList.toggle('is-me', state.myNames.get(mention) === null);
       span.textContent = token;
       target.append(span);
+    } else if (code !== undefined) {
+      const c = document.createElement('code');
+      c.textContent = code;
+      target.append(c);
+    } else if (spoiler !== undefined) {
+      const sp = document.createElement('span');
+      sp.className = 'spoiler';
+      sp.textContent = spoiler;
+      sp.tabIndex = 0;
+      sp.setAttribute('role', 'button');
+      sp.setAttribute('aria-label', 'Spoiler: activate to reveal');
+      const reveal = () => {
+        sp.classList.add('is-revealed');
+        sp.removeAttribute('role');
+        sp.removeAttribute('tabindex');
+        sp.removeAttribute('aria-label');
+      };
+      sp.addEventListener('click', reveal);
+      sp.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); reveal(); } });
+      target.append(sp);
+    } else {
+      const em = document.createElement(bold !== undefined ? 'strong' : 'em');
+      em.textContent = bold ?? italic;
+      target.append(em);
     }
     last = match.index + token.length;
   }
@@ -1252,8 +1490,8 @@ function mentionsMe(text) {
 
 // Is this someone else's message that mentions me or replies to me?
 function isForMe(m) {
-  if (!state.username || m.username === state.username) return false;
-  return mentionsMe(m.content) || state.messages.get(m.reply_to)?.data.username === state.username;
+  if (!state.username || isMine(m) || isMutedMsg(m)) return false;
+  return mentionsMe(m.content) || isMine(state.messages.get(m.reply_to)?.data);
 }
 
 // One-line summary of a message for reply quotes and notifications.
@@ -1295,7 +1533,12 @@ async function trackPresence() {
   const channel = state.channel;
   if (!channel || state.connection !== 'live' || !state.username) return;
   try {
-    await channel.track({ name: state.username, typing: state.typing, at: new Date().toISOString() });
+    await channel.track({
+      name: state.username,
+      typing: state.typing,
+      country: state.tier >= 3 && state.prefs.country ? state.prefs.country : undefined,
+      at: new Date().toISOString(),
+    });
   } catch { /* presence is best-effort */ }
 }
 
@@ -1304,7 +1547,8 @@ function syncPeople(presence) {
   for (const [key, metas] of Object.entries(presence)) {
     const meta = metas?.[metas.length - 1] ?? {};
     const name = typeof meta.name === 'string' && /^[A-Za-z]{2,20}_[0-9]{4}$/.test(meta.name) ? meta.name : null;
-    people.push({ key, name, typing: Boolean(meta.typing) && Boolean(name) });
+    const country = typeof meta.country === 'string' && /^[A-Z]{2}$/.test(meta.country) ? meta.country : null;
+    people.push({ key, name, country, typing: Boolean(meta.typing) && Boolean(name) });
   }
   // You first, then alphabetical; guests on older versions (no name) last.
   people.sort((a, b) => (b.key === state.presenceKey) - (a.key === state.presenceKey)
@@ -1313,6 +1557,7 @@ function syncPeople(presence) {
   state.people = people;
   renderOnline(people.length);
   renderPeople();
+  renderCountries();
   renderTyping();
   noteJoinsWhileAlone(people);
 }
@@ -1331,6 +1576,7 @@ function renderPeople() {
       const name = document.createElement('span');
       name.className = 'person-name';
       name.textContent = p.name ?? 'Guest';
+      if (p.country) name.append(` ${flagEmoji(p.country)}`);
       li.append(avatar, name);
       const isMe = p.key === state.presenceKey;
       if (isMe || p.typing) {
@@ -1502,6 +1748,9 @@ function fillSettingsForm() {
   }
   f.sound.checked = state.prefs.sound;
   f.notify.checked = state.prefs.notify;
+  f.soundAll.checked = state.prefs.soundAll;
+  el.countrySelect.value = state.prefs.country;
+  renderMutedList();
   showNotifyNote();
 }
 
@@ -1532,10 +1781,12 @@ async function onSettingsChange(e) {
     }
   }
   if (input.name === 'sound' && input.checked) playPing();   // preview + unlock audio
+  if (input.name === 'soundAll' && input.checked) playTick();
 
   state.prefs = prefs;
   window.GlobalChatPrefs?.save(prefs);
   showNotifyNote(note);
+  if (input.name === 'country') { renderIdentityFlag(); trackPresence(); }
 }
 
 // =============================================================================
@@ -1558,7 +1809,7 @@ function startReply(id) {
   const entry = state.messages.get(id);
   if (!entry || el.input.disabled || state.legacy) return;
   state.replyTo = id;
-  el.replyName.textContent = entry.data.username === state.username ? 'yourself' : entry.data.username;
+  el.replyName.textContent = isMine(entry.data) ? 'yourself' : displayName(entry.data);
   el.replyText.textContent = previewText(entry.data);
   el.replyBar.hidden = false;
   el.input.focus();
@@ -2080,6 +2331,655 @@ function addLocalNote(kind, text) {
 }
 
 // =============================================================================
+// Country flags (optional, chosen in settings; never detected)
+// =============================================================================
+const regionNames = (() => {
+  try { return new Intl.DisplayNames([navigator.language || 'en'], { type: 'region' }); } catch { return null; }
+})();
+const countryName = (code) => regionNames?.of(code) ?? code;
+const flagEmoji = (code) => String.fromCodePoint(...[...code].map((c) => 0x1F1A5 + c.charCodeAt(0)));
+
+function buildCountrySelect() {
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = 'No flag';
+  const options = COUNTRY_CODES
+    .map((code) => [code, countryName(code)])
+    .sort((a, b) => a[1].localeCompare(b[1]))
+    .map(([code, label]) => {
+      const o = document.createElement('option');
+      o.value = code;
+      o.textContent = `${flagEmoji(code)} ${label}`;
+      return o;
+    });
+  el.countrySelect.replaceChildren(none, ...options);
+}
+
+function renderIdentityFlag() {
+  const code = state.tier >= 3 ? state.prefs.country : '';
+  el.sideFlag.textContent = code ? flagEmoji(code) : '';
+  el.sideFlag.title = code ? countryName(code) : '';
+}
+
+function renderCountries() {
+  const counts = new Map();
+  let unshared = 0;
+  for (const p of state.people) {
+    if (p.country) counts.set(p.country, (counts.get(p.country) ?? 0) + 1);
+    else unshared++;
+  }
+  const sorted = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  fillSlots('countries', (list) => {
+    list.replaceChildren(...sorted.map(([code, n]) => {
+      const li = document.createElement('li');
+      li.title = countryName(code);
+      li.textContent = `${flagEmoji(code)} ${n}`;
+      li.setAttribute('aria-label', `${countryName(code)}: ${n}`);
+      return li;
+    }));
+  });
+  fillSlots('countries-note', (p) => {
+    p.textContent = sorted.length
+      ? (unshared ? `${unshared} more without a flag. Add yours in Appearance & alerts.` : '')
+      : 'Nobody is showing a flag yet. Add yours in Appearance & alerts.';
+  });
+  showCards('countries', state.tier >= 3 && state.people.length > 0);
+}
+
+// Fill every element with data-slot="name" (sidebar + phone dialog copies).
+function fillSlots(name, fn) {
+  document.querySelectorAll(`[data-slot="${name}"]`).forEach(fn);
+}
+function showCards(name, show) {
+  document.querySelectorAll(`[data-card="${name}"]`).forEach((c) => { c.hidden = !show; });
+}
+
+// =============================================================================
+// Word of the day (same for everyone, by UTC date)
+// =============================================================================
+function renderWordOfDay() {
+  const day = Math.floor(Date.now() / 86_400_000);
+  const [word, lang, meaning] = WORDS[day % WORDS.length];
+  fillSlots('wotd-word', (n) => { n.textContent = word; });
+  fillSlots('wotd-lang', (n) => { n.textContent = `(${lang})`; });
+  fillSlots('wotd-meaning', (n) => { n.textContent = meaning; });
+}
+
+// =============================================================================
+// Room state: pinned message, slow mode, question of the day, stats
+// =============================================================================
+async function loadRoomState() {
+  if (state.tier < 3 || !state.sb) return;
+  const { data, error } = await state.sb.rpc('gc_room_state');
+  if (error) { console.warn('[GlobalChat] room state', error); return; }
+  applyRoomState(data);
+}
+
+function applyRoomState(rs) {
+  if (!rs || typeof rs !== 'object') return;
+  state.roomState = rs;
+
+  const pin = rs.pinned && typeof rs.pinned.id === 'string' ? rs.pinned : null;
+  el.pinBar.hidden = !pin;
+  if (pin) {
+    el.pinName.textContent = `${pin.is_bot ? BOT_NAME : pin.username}:`;
+    el.pinContent.textContent = previewText({ kind: pin.kind ?? 'text', content: String(pin.content ?? '') });
+    el.pinBar.onclick = () => {
+      if (state.messages.has(pin.id)) scrollToMessage(pin.id);
+      else toast('That message is older than what’s loaded here.');
+    };
+  }
+
+  const slow = Number(rs.slow_mode_seconds) || 0;
+  el.slowBar.hidden = slow <= 0;
+  el.slowSeconds.textContent = String(slow);
+
+  const q = typeof rs.daily_question === 'string' ? rs.daily_question : '';
+  fillSlots('question', (n) => { n.textContent = q; });
+  showCards('question', Boolean(q));
+
+  renderStats(rs.stats);
+}
+
+function renderStats(stats) {
+  if (!stats || typeof stats !== 'object') { showCards('stats', false); return; }
+  const rows = [
+    ['Messages today', Number(stats.today_messages) || 0],
+    ['People today', Number(stats.today_people) || 0],
+    ['Messages this week', Number(stats.week_messages) || 0],
+  ];
+  if (Number.isInteger(stats.busiest_hour_utc)) {
+    const d = new Date();
+    d.setUTCHours(stats.busiest_hour_utc, 0, 0, 0);
+    rows.push(['Busiest hour (your time)', new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).format(d)]);
+  }
+  fillSlots('stats', (dl) => {
+    dl.replaceChildren(...rows.flatMap(([label, value]) => {
+      const dt = document.createElement('dt');
+      dt.textContent = label;
+      const dd = document.createElement('dd');
+      dd.textContent = typeof value === 'number' ? value.toLocaleString() : value;
+      return [dt, dd];
+    }));
+  });
+  showCards('stats', true);
+}
+
+// =============================================================================
+// "More" menu on a message: translate, copy, mute, report, delete
+// =============================================================================
+function openMoreMenu(id, anchor) {
+  const menu = el.moreMenu;
+  if (!menu.hidden && menu.dataset.for === id) { closeMoreMenu(); return; }
+  const entry = state.messages.get(id);
+  if (!entry) return;
+  const m = entry.data;
+  const mine = isMine(m);
+  const items = [];
+  if (m.content) {
+    items.push(['🌐 Translate', () => translateMessage(id)]);
+    items.push(['📋 Copy text', () => copyMessage(m.content)]);
+  }
+  if (!mine && !m.is_bot) {
+    const muted = state.prefs.muted.includes(m.username);
+    items.push([muted ? `🔊 Unmute ${m.username}` : `🔇 Mute ${m.username}`, () => toggleMute(m.username)]);
+    items.push(['🚩 Report', () => openReport(id), 'danger']);
+  }
+  if (mine && state.tier >= 2) items.push(['🗑️ Delete', () => openDelete(id), 'danger']);
+  if (!items.length) return;
+
+  menu.replaceChildren(...items.map(([label, action, tone]) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.setAttribute('role', 'menuitem');
+    b.textContent = label;
+    if (tone === 'danger') b.classList.add('is-danger');
+    b.addEventListener('click', () => { closeMoreMenu(); action(); });
+    return b;
+  }));
+  menu.dataset.for = id;
+  menu.hidden = false;
+  const r = anchor.getBoundingClientRect();
+  const left = Math.min(Math.max(8, r.right - menu.offsetWidth), window.innerWidth - menu.offsetWidth - 8);
+  const below = r.bottom + 6 + menu.offsetHeight < window.innerHeight;
+  menu.style.left = `${left}px`;
+  menu.style.top = `${below ? r.bottom + 6 : Math.max(8, r.top - menu.offsetHeight - 6)}px`;
+  menu.firstElementChild.focus({ preventScroll: true });
+}
+
+function closeMoreMenu() {
+  if (el.moreMenu.hidden) return;
+  el.moreMenu.hidden = true;
+  delete el.moreMenu.dataset.for;
+}
+
+// =============================================================================
+// Mute (this browser only)
+// =============================================================================
+const isMutedMsg = (m) => Boolean(m) && !m.is_bot && !isMine(m) && state.prefs.muted.includes(m.username);
+
+function toggleMute(name) {
+  const muted = new Set(state.prefs.muted);
+  const nowMuted = !muted.has(name);
+  if (nowMuted) muted.add(name); else muted.delete(name);
+  state.prefs = { ...state.prefs, muted: [...muted] };
+  window.GlobalChatPrefs?.save(state.prefs);
+  for (const { data, node } of state.messages.values()) {
+    if (data.username === name) {
+      node.classList.toggle('is-muted', isMutedMsg(data));
+      node.classList.remove('is-unmuted');
+      node.classList.toggle('is-mention', isForMe(data));
+    }
+  }
+  renderMutedList();
+  toast(nowMuted ? `Muted ${name}. Only you stop seeing their messages.` : `Unmuted ${name}.`);
+}
+
+function renderMutedList() {
+  el.mutedList.replaceChildren(...state.prefs.muted.map((name) => {
+    const li = document.createElement('li');
+    const span = document.createElement('span');
+    span.textContent = name;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'link-button';
+    b.textContent = 'Unmute';
+    b.addEventListener('click', () => toggleMute(name));
+    li.append(span, b);
+    return li;
+  }));
+  el.mutedEmpty.hidden = state.prefs.muted.length > 0;
+}
+
+// =============================================================================
+// Translate: the browser's on-device translator if it has one, otherwise
+// Google Translate in a new tab (the user picks it, and is told about it).
+// =============================================================================
+async function translateMessage(id) {
+  const entry = state.messages.get(id);
+  if (!entry?.data.content) return;
+  const text = entry.data.content;
+  const out = entry.node.querySelector('.msg-translation');
+  const target = (navigator.language || 'en').split('-')[0];
+  if (!out.hidden) { out.hidden = true; return; }
+
+  if ('Translator' in self && 'LanguageDetector' in self) {
+    try {
+      out.hidden = false;
+      out.textContent = 'Translating…';
+      const detector = await self.LanguageDetector.create();
+      const source = (await detector.detect(text))?.[0]?.detectedLanguage;
+      if (!source || source === 'und') throw new Error('unknown language');
+      if (source === target) { out.textContent = 'This is already in your language.'; return; }
+      const translator = await self.Translator.create({ sourceLanguage: source, targetLanguage: target });
+      const result = await translator.translate(text);
+      const note = document.createElement('small');
+      let from = source;
+      try { from = new Intl.DisplayNames([target], { type: 'language' }).of(source) ?? source; } catch { /* keep code */ }
+      note.textContent = `Translated from ${from} by your browser`;
+      out.replaceChildren(document.createTextNode(result), note);
+      return;
+    } catch (err) {
+      // We've awaited, so the click no longer counts for opening a tab
+      // (popup blockers). Offer a link the person can click instead.
+      console.info('[GlobalChat] on-device translation unavailable', err);
+      const a = document.createElement('a');
+      a.href = googleTranslateUrl(text, target);
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = 'Open in Google Translate ↗';
+      out.replaceChildren('Your browser couldn’t translate this. ', a);
+      return;
+    }
+  }
+  window.open(googleTranslateUrl(text, target), '_blank', 'noopener,noreferrer');
+  toast('Opened Google Translate in a new tab.');
+}
+
+const googleTranslateUrl = (text, target) =>
+  `https://translate.google.com/?sl=auto&tl=${encodeURIComponent(target)}&op=translate&text=${encodeURIComponent(text)}`;
+
+// =============================================================================
+// Editing your own message (2 minutes)
+// =============================================================================
+function startEdit(id) {
+  const entry = state.messages.get(id);
+  if (!entry || !isMine(entry.data) || !isEditable(entry.data) || el.input.disabled) return;
+  cancelReply();
+  clearPendingImage();
+  state.editing = id;
+  el.editText.textContent = previewText(entry.data);
+  el.editBar.hidden = false;
+  el.input.value = entry.data.content;
+  autosize();
+  updateComposer();
+  el.input.focus();
+  el.input.setSelectionRange(el.input.value.length, el.input.value.length);
+}
+
+function cancelEdit({ keepText = false } = {}) {
+  if (!state.editing) return;
+  state.editing = null;
+  el.editBar.hidden = true;
+  if (!keepText) { el.input.value = ''; restoreDraft(); }
+  autosize();
+  updateComposer();
+}
+
+async function saveEdit() {
+  const id = state.editing;
+  const text = normalizeText(el.input.value);
+  if (!text) { showComposerError('Type something, or press Esc to cancel editing.'); return; }
+  if (charCount(text) > MAX_LEN) { showComposerError(`Messages can be up to ${MAX_LEN} characters.`); return; }
+  state.sending = true;
+  updateComposer();
+  try {
+    const { data, error } = await state.sb.rpc('gc_edit_message', { p_message_id: id, p_content: text });
+    if (error) throw error;
+    applyEdit(id, data?.content ?? text, data?.edited_at ?? new Date().toISOString());
+    cancelEdit();
+    showComposerError('');
+  } catch (err) {
+    const msg = String(err?.message ?? '');
+    console.warn('[GlobalChat] edit failed', err);
+    if (msg.includes('EDIT_WINDOW_PASSED')) { cancelEdit({ keepText: true }); showComposerError('The 2-minute edit window has passed. Your text is still here if you want to send it as a new message.'); }
+    else if (msg.includes('RATE_LIMITED')) showComposerError('Slow down a little and try again.');
+    else if (msg.includes('MESSAGE_NOT_FOUND')) { cancelEdit({ keepText: true }); showComposerError('That message is gone. Your text is still here.'); }
+    else showComposerError('Couldn’t save the edit. Try again in a moment.');
+  } finally {
+    state.sending = false;
+    updateComposer();
+  }
+}
+
+function applyEdit(id, content, editedAt) {
+  const entry = state.messages.get(id);
+  if (!entry || typeof content !== 'string') return;
+  entry.data.content = content;
+  entry.data.edited_at = editedAt;
+  renderRichText(entry.node.querySelector('.msg-text'), content);
+  entry.node.querySelector('.msg-translation').hidden = true;
+  renderEdited(entry.node, entry.data);
+  entry.node.classList.toggle('is-mention', isForMe(entry.data));
+  refreshRepliesTo(id);
+  if (state.filter) applyFilter();
+}
+
+// =============================================================================
+// Choose your own name
+// =============================================================================
+function openRename() {
+  if (state.tier < 3 || !state.session) return;
+  el.renameForm.reset();
+  el.renameError.hidden = true;
+  el.renameInput.value = (state.username ?? '').split('_')[0];
+  el.renameDigits.textContent = `_${1000 + randomInt(9000)}`;
+  el.renameDialog.showModal();
+  el.renameInput.select();
+}
+
+async function submitRename(event) {
+  event.preventDefault();
+  const fail = (text) => { el.renameError.textContent = text; el.renameError.hidden = !text; };
+  const letters = el.renameInput.value.replace(/[^A-Za-z]/g, '');
+  if (letters.length < 2) return fail('Use at least 2 letters (A–Z).');
+  const word = letters.charAt(0).toUpperCase() + letters.slice(1, 16);
+  el.renameSubmit.disabled = true;
+  fail('');
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const name = `${word}${el.renameDigits.textContent}`;
+      const { data, error } = await state.sb.rpc('gc_rename', { p_username: name });
+      if (!error) {
+        setUsername(typeof data === 'string' ? data : name);
+        el.renameDialog.close();
+        toast(`You're now ${state.username}. Messages you already sent keep your old name.`);
+        return;
+      }
+      const msg = String(error.message ?? '');
+      if (msg.includes('USERNAME_TAKEN')) { el.renameDigits.textContent = `_${1000 + randomInt(9000)}`; continue; }
+      if (msg.includes('INVALID_USERNAME')) return fail('That name isn’t allowed. Try another.');
+      if (msg.includes('RATE_LIMITED')) return fail('You changed your name a moment ago. Try again in a few seconds.');
+      return fail('Couldn’t change your name. Try again in a moment.');
+    }
+    fail('That name is popular! Try a different one.');
+  } finally {
+    el.renameSubmit.disabled = false;
+  }
+}
+
+// =============================================================================
+// Stickers
+// =============================================================================
+function buildStickerPanel() {
+  for (const [id, label] of STICKERS) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.setAttribute('aria-label', `Send sticker: ${label}`);
+    const img = document.createElement('img');
+    img.src = `stickers/${id}.svg`;
+    img.alt = '';
+    img.width = 68;
+    img.height = 68;
+    b.append(img);
+    b.addEventListener('click', () => sendSticker(id));
+    el.stickerPanel.append(b);
+  }
+}
+
+function setStickerOpen(open) {
+  if (open) { setAttachOpen(false); setEmojiOpen(false); }
+  el.stickerPanel.hidden = !open;
+  if (open) el.stickerPanel.querySelector('button')?.focus();
+}
+
+async function sendSticker(id) {
+  setStickerOpen(false);
+  await postSpecial({ ...baseRow(''), kind: 'sticker', sticker: id });
+  cancelReply();
+}
+
+function renderSticker(node, m) {
+  const img = node.querySelector('.msg-sticker');
+  const label = STICKERS.find(([id]) => id === m.sticker)?.[1] ?? m.sticker;
+  img.hidden = false;
+  img.src = `stickers/${m.sticker}.svg`;
+  img.alt = `Sticker: ${label}`;
+  node.classList.add('is-sticker');
+}
+
+// Send a non-text message (sticker, voice note) with the same checks and
+// error messages as the composer.
+async function postSpecial(row) {
+  if (el.input.disabled) return null;
+  if (Date.now() < state.cooldownUntil || !clientCooldownCheck()) return null;
+  try {
+    const data = await postRow(row);
+    state.sendTimes.push(Date.now());
+    afterPosted(data);
+    return data;
+  } catch (err) {
+    const msg = String(err?.message ?? '');
+    if (msg.includes('USERNAME_TAKEN')) {
+      setUsername(generateUsername());
+      showComposerError('Your guest name was taken, so you have a new one. Try again.');
+    } else {
+      await handleSendError(err, true);
+    }
+    return null;
+  }
+}
+
+// =============================================================================
+// Voice notes (up to 30 s, private storage like photos)
+// =============================================================================
+async function startVoice() {
+  setAttachOpen(false);
+  if (state.recorder || el.input.disabled) return;
+  if (!navigator.mediaDevices?.getUserMedia || !('MediaRecorder' in window)) {
+    showComposerError('Voice notes aren’t supported in this browser.');
+    return;
+  }
+  const type = VOICE_TYPES.find(([mime]) => MediaRecorder.isTypeSupported(mime));
+  if (!type) { showComposerError('This browser can’t record a supported audio format.'); return; }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch {
+    showComposerError('Microphone access was blocked. Allow it in your browser to record a voice note.');
+    return;
+  }
+  const rec = new MediaRecorder(stream, { mimeType: type[0], audioBitsPerSecond: 48_000 });
+  const r = { rec, stream, chunks: [], startedAt: Date.now(), type: type[1], ext: type[2] };
+  state.recorder = r;
+  rec.addEventListener('dataavailable', (e) => { if (e.data.size) r.chunks.push(e.data); });
+  rec.addEventListener('stop', () => {
+    stream.getTracks().forEach((t) => t.stop());
+    clearInterval(r.timer);
+    if (state.recorder !== r) return;
+    r.blob = new Blob(r.chunks, { type: r.type });
+    r.url = URL.createObjectURL(r.blob);
+    el.voicePreview.src = r.url;
+    el.voicePreview.hidden = false;
+    el.voiceBar.classList.add('is-stopped');
+    el.voiceLabel.textContent = 'Voice note ready';
+    el.voiceStop.hidden = true;
+    el.voiceSend.hidden = false;
+    el.voiceSend.focus();
+  });
+  rec.start(250);
+  el.voiceBar.hidden = false;
+  el.voiceBar.classList.remove('is-stopped');
+  el.voiceLabel.textContent = 'Recording…';
+  el.voicePreview.hidden = true;
+  el.voiceStop.hidden = false;
+  el.voiceSend.hidden = true;
+  const tick = () => {
+    const ms = Date.now() - r.startedAt;
+    const secs = Math.min(30, Math.floor(ms / 1000));
+    el.voiceTime.textContent = `0:${String(secs).padStart(2, '0')} / 0:30`;
+    if (ms >= VOICE_MAX_MS && rec.state === 'recording') rec.stop();
+  };
+  tick();
+  r.timer = setInterval(tick, 250);
+  el.voiceStop.focus();
+}
+
+function stopVoice() {
+  if (state.recorder?.rec.state === 'recording') state.recorder.rec.stop();
+}
+
+function cancelVoice() {
+  const r = state.recorder;
+  if (!r) return;
+  state.recorder = null;
+  clearInterval(r.timer);
+  if (r.rec.state === 'recording') r.rec.stop();
+  r.stream.getTracks().forEach((t) => t.stop());
+  if (r.url) URL.revokeObjectURL(r.url);
+  if (r.path) state.sb?.storage.from(IMAGE_BUCKET).remove([r.path]).catch(() => {});
+  el.voicePreview.removeAttribute('src');
+  el.voiceBar.hidden = true;
+}
+
+async function sendVoice() {
+  const r = state.recorder;
+  if (!r?.blob) return;
+  if (r.blob.size > MAX_UPLOAD_BYTES) { showComposerError('That voice note is too big.'); return; }
+  el.voiceSend.disabled = true;
+  try {
+    if (!r.path) {
+      const path = `${state.session.user.id}/${crypto.randomUUID()}.${r.ext}`;
+      const { error } = await state.sb.storage.from(IMAGE_BUCKET)
+        .upload(path, r.blob, { contentType: r.type, upsert: false, cacheControl: '3600' });
+      if (error) throw new Error(`UPLOAD_FAILED ${error.statusCode ?? ''} ${error.message ?? ''}`);
+      r.path = path;
+    }
+    const data = await postSpecial({ ...baseRow(''), kind: 'voice', image_path: r.path });
+    if (data) {
+      r.path = null;   // the file now belongs to the message
+      cancelVoice();
+      cancelReply();
+    }
+  } catch (err) {
+    await handleSendError(err, true);
+  } finally {
+    el.voiceSend.disabled = false;
+  }
+}
+
+function renderVoice(node, m) {
+  const audio = node.querySelector('.msg-voice');
+  audio.hidden = false;
+  audio.setAttribute('aria-label', `Voice note from ${displayName(m)}`);
+  signedUrl(m).then((url) => { if (url) audio.src = url; });
+}
+
+// =============================================================================
+// Little delights: confetti, message sound, drafts, share
+// =============================================================================
+function maybeConfetti(list) {
+  if (!list.some((m) => !isMutedMsg(m) && CONFETTI_WORDS.test(m.content))) return;
+  if (Date.now() - state.confettiAt < 8000) return;
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  state.confettiAt = Date.now();
+  runConfetti();
+}
+
+function runConfetti() {
+  const canvas = el.confetti;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = window.innerWidth * dpr;
+  canvas.height = window.innerHeight * dpr;
+  canvas.hidden = false;
+  ctx.scale(dpr, dpr);
+  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#8B5CF6';
+  const colors = [accent, '#FBBF24', '#34D399', '#60A5FA', '#F472B6', '#FFFFFF'];
+  const parts = Array.from({ length: 140 }, () => ({
+    x: Math.random() * window.innerWidth,
+    y: -20 - Math.random() * window.innerHeight * 0.4,
+    vx: (Math.random() - 0.5) * 3,
+    vy: 2 + Math.random() * 3,
+    r: Math.random() * Math.PI,
+    vr: (Math.random() - 0.5) * 0.3,
+    w: 6 + Math.random() * 6,
+    h: 8 + Math.random() * 8,
+    c: colors[Math.floor(Math.random() * colors.length)],
+  }));
+  const start = performance.now();
+  const frame = (t) => {
+    const elapsed = t - start;
+    ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+    ctx.globalAlpha = elapsed > 2200 ? Math.max(0, 1 - (elapsed - 2200) / 600) : 1;
+    for (const p of parts) {
+      p.x += p.vx; p.y += p.vy; p.vy += 0.04; p.r += p.vr;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.r);
+      ctx.fillStyle = p.c;
+      ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+      ctx.restore();
+    }
+    if (elapsed < 2800) requestAnimationFrame(frame);
+    else { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, canvas.width, canvas.height); canvas.hidden = true; }
+  };
+  requestAnimationFrame(frame);
+}
+
+// A soft single "tick" for every new message (setting), throttled.
+function playTick() {
+  if (Date.now() - state.audioTick < 800) return;
+  state.audioTick = Date.now();
+  try {
+    state.audio ??= new AudioContext();
+    const ctx = state.audio;
+    if (ctx.state === 'suspended') ctx.resume();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.value = 660;
+    const t = ctx.currentTime;
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.06, t + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.14);
+  } catch { /* audio is optional */ }
+}
+
+function saveDraft() {
+  if (state.editing) return;
+  try {
+    if (el.input.value.trim()) sessionStorage.setItem(DRAFT_KEY, el.input.value);
+    else sessionStorage.removeItem(DRAFT_KEY);
+  } catch { /* storage unavailable */ }
+}
+
+function restoreDraft() {
+  try {
+    const draft = sessionStorage.getItem(DRAFT_KEY);
+    if (draft && !el.input.value) { el.input.value = draft; autosize(); updateComposer(); }
+  } catch { /* storage unavailable */ }
+}
+
+async function shareRoom() {
+  const url = `${location.origin}${location.pathname}`;
+  if (navigator.share) {
+    try { await navigator.share({ title: 'GlobalChat', text: SHARE_TEXT, url }); return; }
+    catch (err) { if (err?.name === 'AbortError') return; }
+  }
+  try {
+    await navigator.clipboard.writeText(`${SHARE_TEXT} ${url}`);
+    toast('Link copied. Paste it anywhere to invite people.');
+  } catch {
+    toast(`Share this link: ${url}`);
+  }
+}
+
+// =============================================================================
 // Toasts
 // =============================================================================
 function toast(text, tone) {
@@ -2107,6 +3007,8 @@ function wireUI() {
   el.input.addEventListener('input', () => {
     autosize();
     updateComposer();
+    saveDraft();
+    el.commandHint.hidden = !(state.tier >= 3 && !state.editing && el.input.value.startsWith('/'));
     setTyping(el.input.value.trim().length > 0);
     if (!el.composerError.hidden && Date.now() >= state.cooldownUntil) showComposerError('');
   });
@@ -2115,6 +3017,34 @@ function wireUI() {
     const file = [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/'));
     if (file && !state.legacy) { e.preventDefault(); attachImage(file); }
   });
+
+  // Community features
+  buildCountrySelect();
+  buildStickerPanel();
+  renderWordOfDay();
+  renderIdentityFlag();
+  restoreDraft();
+  setInterval(loadRoomState, ROOM_STATE_REFRESH_MS);
+  el.shareButton.addEventListener('click', shareRoom);
+  el.editCancel.addEventListener('click', () => { cancelEdit(); el.input.focus(); });
+  el.attachSticker.addEventListener('click', () => setStickerOpen(true));
+  el.attachVoice.addEventListener('click', startVoice);
+  el.voiceStop.addEventListener('click', stopVoice);
+  el.voiceSend.addEventListener('click', sendVoice);
+  el.voiceCancel.addEventListener('click', cancelVoice);
+  document.querySelectorAll('[data-open-rename]').forEach((b) => b.addEventListener('click', () => {
+    b.closest('dialog')?.close();
+    openRename();
+  }));
+  el.renameForm.addEventListener('submit', submitRename);
+  el.renameInput.addEventListener('input', () => {
+    const clean = el.renameInput.value.replace(/[^A-Za-z]/g, '');
+    if (clean !== el.renameInput.value) el.renameInput.value = clean;
+  });
+  document.querySelectorAll('[data-answer-question]').forEach((b) => b.addEventListener('click', () => {
+    b.closest('dialog')?.close();
+    el.input.focus();
+  }));
 
   // Replies, images, polls
   el.replyCancel.addEventListener('click', () => { cancelReply(); el.input.focus(); });
@@ -2159,7 +3089,10 @@ function wireUI() {
     if (!el.emojiPanel.hidden && !e.target.closest('.emoji-wrap')) setEmojiOpen(false);
     if (!el.attachMenu.hidden && !e.target.closest('#attach-menu, #attach-toggle')) setAttachOpen(false);
     if (!el.reactionPicker.hidden && !e.target.closest('#reaction-picker, .msg-react')) closeReactionPicker();
+    if (!el.moreMenu.hidden && !e.target.closest('#more-menu, .msg-more')) closeMoreMenu();
+    if (!el.stickerPanel.hidden && !e.target.closest('#sticker-panel, #attach-sticker')) setStickerOpen(false);
   });
+  window.addEventListener('resize', closeMoreMenu);
   window.addEventListener('resize', closeReactionPicker);
 
   // Search
@@ -2174,9 +3107,12 @@ function wireUI() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       if (!el.reactionPicker.hidden) closeReactionPicker();
+      else if (!el.moreMenu.hidden) closeMoreMenu();
+      else if (!el.stickerPanel.hidden) { setStickerOpen(false); el.attachToggle.focus(); }
       else if (!el.emojiPanel.hidden) { setEmojiOpen(false); el.emojiToggle.focus(); }
       else if (!el.attachMenu.hidden) { setAttachOpen(false); el.attachToggle.focus(); }
       else if (document.querySelector('dialog[open]')) return;
+      else if (state.editing && document.activeElement === el.input) cancelEdit();
       else if (state.replyTo && document.activeElement === el.input) cancelReply();
       else if (!el.searchBar.hidden) setSearchOpen(false);
       return;
@@ -2192,6 +3128,7 @@ function wireUI() {
   el.feed.addEventListener('scroll', () => {
     state.atBottom = isNearBottom();
     closeReactionPicker();
+    closeMoreMenu();
     if (!el.jump.hidden && state.atBottom) { state.unseen = 0; el.jump.hidden = true; }
   }, { passive: true });
   el.jump.addEventListener('click', () => { scrollToBottom(); el.input.focus({ preventScroll: true }); });
@@ -2231,7 +3168,7 @@ function wireUI() {
   el.settingsForm.addEventListener('change', onSettingsChange);
   document.querySelectorAll('[data-close-dialog]').forEach((b) =>
     b.addEventListener('click', () => b.closest('dialog').close()));
-  for (const d of [el.aboutDialog, el.reportDialog, el.settingsDialog, el.peopleDialog, el.pollDialog, el.deleteDialog]) {
+  for (const d of [el.aboutDialog, el.reportDialog, el.settingsDialog, el.peopleDialog, el.pollDialog, el.deleteDialog, el.renameDialog]) {
     // Click on the backdrop closes the dialog.
     d.addEventListener('click', (e) => { if (e.target === d) d.close(); });
   }

@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-accent="violet" data-density="comfortable">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GlobalChat — Moderation</title>
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#0A0B12">
+  <meta name="color-scheme" content="dark light">
+  <meta name="referrer" content="no-referrer">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="admin.css">
+  <script src="theme.js"></script>
+  <script type="module" src="admin.js"></script>
+</head>
+<body class="admin-body">
+  <main class="admin" id="admin">
+    <header class="admin-head">
+      <div class="brand">
+        <svg class="brand-mark brand-mark-sm" viewBox="0 0 64 64" aria-hidden="true">
+          <circle class="brand-planet" cx="32" cy="32" r="13"/>
+          <ellipse class="brand-orbit" cx="32" cy="32" rx="24" ry="8.5" transform="rotate(-24 32 32)"/>
+          <circle class="brand-moon" cx="52.5" cy="22.5" r="4"/>
+        </svg>
+        <div>
+          <h1 class="admin-title">Moderation</h1>
+          <p class="side-note" id="admin-who">Moderators only.</p>
+        </div>
+      </div>
+      <div class="admin-head-actions" id="admin-actions" hidden>
+        <button type="button" class="button button-quiet button-sm" id="refresh">Refresh</button>
+        <button type="button" class="button button-quiet button-sm" id="sign-out">Sign out</button>
+      </div>
+    </header>
+
+    <!-- Sign in -->
+    <section class="card admin-card" id="login-card" hidden>
+      <h2 class="side-heading">Sign in</h2>
+      <p class="side-note">Use the email and password of a Supabase user you added to <code>public.moderators</code> (see MODERATION.md). Guest sessions can't moderate.</p>
+      <form class="admin-form" id="login-form" novalidate>
+        <label class="field-label" for="email">Email</label>
+        <input class="field field-line" id="email" type="email" autocomplete="username" required>
+        <label class="field-label" for="password">Password</label>
+        <input class="field field-line" id="password" type="password" autocomplete="current-password" required>
+        <p class="composer-error" id="login-error" role="alert" hidden></p>
+        <button type="submit" class="button button-primary" id="login-submit">Sign in</button>
+      </form>
+    </section>
+
+    <p class="notice notice-warn" id="admin-error" role="alert" hidden></p>
+
+    <div class="admin-grid" id="admin-panels" hidden>
+      <!-- Room controls -->
+      <section class="card admin-card">
+        <h2 class="side-heading">Room</h2>
+        <label class="field-label" for="slow-mode">Slow mode</label>
+        <div class="admin-row">
+          <select class="field field-line" id="slow-mode">
+            <option value="0">Off</option>
+            <option value="5">1 message every 5 s</option>
+            <option value="10">1 message every 10 s</option>
+            <option value="30">1 message every 30 s</option>
+            <option value="60">1 message per minute</option>
+            <option value="120">1 message every 2 min</option>
+            <option value="300">1 message every 5 min</option>
+          </select>
+          <button type="button" class="button button-primary button-sm" id="slow-save">Apply</button>
+        </div>
+        <p class="field-label">Pinned message</p>
+        <p class="card-text" id="pin-current">None</p>
+        <button type="button" class="button button-quiet button-sm" id="unpin" hidden>Unpin</button>
+        <dl class="stats" id="room-stats"></dl>
+      </section>
+
+      <!-- Reports -->
+      <section class="card admin-card admin-wide">
+        <h2 class="side-heading">Open reports <span class="count-badge" id="reports-count">0</span></h2>
+        <ul class="admin-list" id="reports"></ul>
+        <p class="side-note" id="reports-empty">No open reports. 🎉</p>
+      </section>
+
+      <!-- Messages -->
+      <section class="card admin-card admin-wide">
+        <h2 class="side-heading">Live messages <span class="count-badge" id="messages-count">0</span></h2>
+        <p class="side-note">Includes messages hidden after reports. Pin, hide, delete, or ban the author.</p>
+        <ul class="admin-list" id="messages"></ul>
+      </section>
+
+      <!-- Word filter -->
+      <section class="card admin-card">
+        <h2 class="side-heading">Word filter</h2>
+        <p class="side-note">Whole words, any case, are masked like <code>f***</code> in new messages, poll options and nicknames. Letters only.</p>
+        <form class="admin-row" id="word-form" novalidate>
+          <label class="visually-hidden" for="word-input">Word to block</label>
+          <input class="field field-line" id="word-input" maxlength="30" placeholder="word" autocomplete="off">
+          <button type="submit" class="button button-primary button-sm">Add</button>
+        </form>
+        <ul class="admin-chips" id="words"></ul>
+      </section>
+
+      <!-- Bans -->
+      <section class="card admin-card">
+        <h2 class="side-heading">Bans</h2>
+        <p class="side-note">Bans apply to one guest session. See MODERATION.md for why that matters.</p>
+        <ul class="admin-list" id="bans"></ul>
+        <p class="side-note" id="bans-empty">Nobody is banned.</p>
+      </section>
+    </div>
+  </main>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+</body>
+</html>
