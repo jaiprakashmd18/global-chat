@@ -56,6 +56,7 @@ const RICH_TOKEN = /(https?:\/\/[^\s<>"']+)|@([A-Za-z]{2,20}_[0-9]{4})\b|`([^`\n
 // Columns by database version, newest first. The page detects which one the
 // database has and switches off what it can't support (see setTier()).
 const TIER_COLUMNS = {
+  4: 'id, username, content, created_at, expires_at, kind, reply_to, image_path, poll_options, is_bot, command, sticker, country, edited_at, gender',
   3: 'id, username, content, created_at, expires_at, kind, reply_to, image_path, poll_options, is_bot, command, sticker, country, edited_at',
   2: 'id, username, content, created_at, expires_at, kind, reply_to, image_path, poll_options',
   1: 'id, username, content, created_at, expires_at',
@@ -76,6 +77,13 @@ const ROOM_STATE_REFRESH_MS = 5 * 60_000;
 const DRAFT_KEY = 'globalchat.draft';
 const CONFETTI_WORDS = /\b(happy\s+birthday|hbd|congrats|congratulations|congratz)\b|🎉|🥳|🎂/i;
 const SHARE_TEXT = 'Come chat with the world on GlobalChat: no sign-up, messages vanish after an hour.';
+
+// Optional gender labels (chosen by the person, never required or guessed).
+const GENDERS = {
+  male: { symbol: '♂', label: 'Male' },
+  female: { symbol: '♀', label: 'Female' },
+  nonbinary: { symbol: '⚧', label: 'Non-binary' },
+};
 
 // ISO 3166 country codes for the optional flag (names come from the browser).
 const COUNTRY_CODES = ('AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS '
@@ -286,7 +294,7 @@ const state = {
     ?? { theme: 'dark', accent: 'violet', density: 'comfortable', sound: false, notify: false, soundAll: false, country: '', muted: [] },
   audio: null,
   legacy: false,                 // database not yet upgraded: hide new features
-  tier: 3,                       // database version detected (3 = everything)
+  tier: 4,                       // database version detected (4 = everything)
   myNames: new Map(),            // names this tab used -> ms they stopped being ours (null = current)
   roomState: null,               // pin, slow mode, question of the day, stats
   editing: null,                 // id of the message being edited
@@ -694,7 +702,7 @@ async function loadHistory({ backfill = false } = {}) {
   upsertMessages(batch, { initial });
   updateFeedState();
   loadExtras([...state.messages.keys()]);
-  if (!backfill) loadRoomState();
+  if (!backfill) { loadRoomState(); maybeAskGender(); }
 }
 
 const columns = () => TIER_COLUMNS[state.tier];
@@ -705,17 +713,21 @@ function isMissingColumn(error) {
 
 // The page is newer than the database: keep what works and hide the rest
 // until schema.sql is re-run. Tier 1 = original chat only, 2 = replies,
-// photos, polls, reactions, delete; 3 = everything.
+// photos, polls, reactions, delete; 3 = community features; 4 = everything
+// (adds gender labels).
 function setTier(tier) {
   state.tier = tier;
   state.legacy = tier === 1;
-  document.documentElement.dataset.features = tier === 1 ? 'legacy' : tier === 2 ? 'v2' : '';
-  document.getElementById('setup-notice').hidden = tier === 3;
-  document.getElementById('setup-notice-title').textContent = tier === 1
-    ? 'Photos, polls, replies and reactions are switched off'
-    : 'Stickers, voice notes, editing, flags, trivia and room stats are switched off';
-  console.warn(`[GlobalChat] Database features: tier ${tier} of 3. Re-run schema.sql to enable everything.`);
+  document.documentElement.dataset.features = { 1: 'legacy', 2: 'v2', 3: 'v3' }[tier] ?? '';
+  document.getElementById('setup-notice').hidden = tier === 4;
+  document.getElementById('setup-notice-title').textContent = {
+    1: 'Photos, polls, replies and reactions are switched off',
+    2: 'Stickers, voice notes, editing, flags, trivia and room stats are switched off',
+    3: 'Gender labels are switched off',
+  }[tier] ?? '';
+  console.warn(`[GlobalChat] Database features: tier ${tier} of 4. Re-run schema.sql to enable everything.`);
   renderIdentityFlag();
+  renderIdentityGender();
   renderCountries();
 }
 
@@ -745,6 +757,7 @@ function isValidMessage(m) {
   if (typeof m.reply_to !== 'string') m.reply_to = null;
   m.is_bot = m.is_bot === true;
   if (typeof m.country !== 'string' || !/^[A-Z]{2}$/.test(m.country)) m.country = null;
+  if (!Object.hasOwn(GENDERS, m.gender ?? '')) m.gender = null;
   if (!['roll', 'flip', '8ball'].includes(m.command)) m.command = null;
   if (m.kind === 'image' || m.kind === 'voice') return typeof m.image_path === 'string';
   if (m.kind === 'sticker') return STICKERS.some(([id]) => id === m.sticker);
@@ -823,6 +836,7 @@ function buildNode(m) {
     flag.textContent = flagEmoji(m.country);
     flag.title = countryName(m.country);
   }
+  if (m.gender) fillGenderChip(node.querySelector('.msg-gender'), m.gender);
   const badge = node.querySelector('.msg-badge');
   if (m.is_bot || m.command) {
     badge.hidden = false;
@@ -1284,6 +1298,7 @@ function baseRow(content) {
   const row = { username: state.username, content };
   if (state.replyTo && state.tier >= 2) row.reply_to = state.replyTo;
   if (state.prefs.country && state.tier >= 3) row.country = state.prefs.country;
+  if (state.prefs.gender && state.tier >= 4) row.gender = state.prefs.gender;
   return row;
 }
 
@@ -1537,6 +1552,7 @@ async function trackPresence() {
       name: state.username,
       typing: state.typing,
       country: state.tier >= 3 && state.prefs.country ? state.prefs.country : undefined,
+      gender: state.tier >= 4 && state.prefs.gender ? state.prefs.gender : undefined,
       at: new Date().toISOString(),
     });
   } catch { /* presence is best-effort */ }
@@ -1548,7 +1564,8 @@ function syncPeople(presence) {
     const meta = metas?.[metas.length - 1] ?? {};
     const name = typeof meta.name === 'string' && /^[A-Za-z]{2,20}_[0-9]{4}$/.test(meta.name) ? meta.name : null;
     const country = typeof meta.country === 'string' && /^[A-Z]{2}$/.test(meta.country) ? meta.country : null;
-    people.push({ key, name, country, typing: Boolean(meta.typing) && Boolean(name) });
+    const gender = Object.hasOwn(GENDERS, meta.gender ?? '') ? meta.gender : null;
+    people.push({ key, name, country, gender, typing: Boolean(meta.typing) && Boolean(name) });
   }
   // You first, then alphabetical; guests on older versions (no name) last.
   people.sort((a, b) => (b.key === state.presenceKey) - (a.key === state.presenceKey)
@@ -1577,6 +1594,12 @@ function renderPeople() {
       name.className = 'person-name';
       name.textContent = p.name ?? 'Guest';
       if (p.country) name.append(` ${flagEmoji(p.country)}`);
+      if (p.gender) {
+        const chip = document.createElement('span');
+        chip.className = 'gender-chip';
+        fillGenderChip(chip, p.gender);
+        name.append(' ', chip);
+      }
       li.append(avatar, name);
       const isMe = p.key === state.presenceKey;
       if (isMe || p.typing) {
@@ -1749,6 +1772,7 @@ function fillSettingsForm() {
   f.sound.checked = state.prefs.sound;
   f.notify.checked = state.prefs.notify;
   f.soundAll.checked = state.prefs.soundAll;
+  for (const input of f.gender) input.checked = input.value === state.prefs.gender;
   el.countrySelect.value = state.prefs.country;
   renderMutedList();
   showNotifyNote();
@@ -1787,6 +1811,7 @@ async function onSettingsChange(e) {
   window.GlobalChatPrefs?.save(prefs);
   showNotifyNote(note);
   if (input.name === 'country') { renderIdentityFlag(); trackPresence(); }
+  if (input.name === 'gender') setGender(input.value);
 }
 
 // =============================================================================
@@ -2403,6 +2428,42 @@ function renderWordOfDay() {
   fillSlots('wotd-word', (n) => { n.textContent = word; });
   fillSlots('wotd-lang', (n) => { n.textContent = `(${lang})`; });
   fillSlots('wotd-meaning', (n) => { n.textContent = meaning; });
+}
+
+// =============================================================================
+// Gender label (optional; asked once, changeable in settings)
+// =============================================================================
+function fillGenderChip(chip, gender) {
+  const g = GENDERS[gender];
+  if (!g) { chip.hidden = true; return; }
+  chip.hidden = false;
+  chip.textContent = g.symbol;
+  chip.title = g.label;
+  chip.setAttribute('aria-label', g.label);
+  chip.dataset.gender = gender;
+}
+
+function renderIdentityGender() {
+  const chip = $('side-gender');
+  if (state.tier >= 4 && state.prefs.gender) fillGenderChip(chip, state.prefs.gender);
+  else chip.hidden = true;
+}
+
+function maybeAskGender() {
+  $('gender-ask').hidden = state.tier < 4 || state.prefs.genderAsked;
+}
+
+// '' = don't show. Choosing anything (including Skip) stops the question.
+function setGender(gender) {
+  const value = Object.hasOwn(GENDERS, gender) ? gender : '';
+  state.prefs = { ...state.prefs, gender: value, genderAsked: true };
+  window.GlobalChatPrefs?.save(state.prefs);
+  $('gender-ask').hidden = true;
+  renderIdentityGender();
+  trackPresence();
+  const radios = el.settingsForm.elements.gender;
+  for (const input of radios) input.checked = input.value === value;
+  if (value) toast(`Your label ${GENDERS[value].symbol} ${GENDERS[value].label} will show on new messages. Change it in Appearance & alerts.`);
 }
 
 // =============================================================================
@@ -3158,6 +3219,9 @@ function wireUI() {
   buildStickerPanel();
   renderWordOfDay();
   renderIdentityFlag();
+  renderIdentityGender();
+  document.querySelectorAll('#gender-ask [data-gender]').forEach((b) =>
+    b.addEventListener('click', () => setGender(b.dataset.gender)));
   restoreDraft();
   setInterval(loadRoomState, ROOM_STATE_REFRESH_MS);
   el.shareButton.addEventListener('click', shareRoom);

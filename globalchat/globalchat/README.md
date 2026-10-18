@@ -35,6 +35,7 @@ It's a static frontend (HTML, CSS, vanilla JS modules) on top of Supabase: anony
 - **Confetti** 🎉 when a message says happy birthday or congrats.
 - **Installable app**: add to home screen on phones and desktop (`manifest.webmanifest`, `sw.js`). The service worker caches only the page itself, never chat data.
 - **Country flag**, opt-in: pick one in settings and it shows next to your name and in **"Where people are"** (a count of flags among people online). Never detected from your location.
+- **Gender label**, opt-in: new visitors are asked once ("Show your gender next to your name?" ♂ Male / ♀ Female / ⚧ Non-binary / Skip), and can change it or pick "Don't show" in Appearance & alerts. It shows as a small neutral label next to the name on new messages, in the online list and on your identity card. Never required, never guessed.
 - **Pinned message** and **slow mode**, set by moderators on the admin page.
 - **Room bot** (server side, labelled "bot"): a **question of the day** at 12:03 UTC, and **trivia** every 15 minutes while people are chatting. First correct answer wins, and the bot announces the winner.
 - **Stickers**: eight GlobalChat planet stickers (`stickers/*.svg`).
@@ -390,7 +391,7 @@ Nothing here has been deployed or connected to a live Supabase project yet. You 
 - Other visitors see only random names, message text, and times, plus each open tab's random name in the online list and a typing hint while someone writes. IP addresses, emails, and internal IDs are never shown, and `user_id` isn't readable through the API.
 - GlobalChat isn't fully anonymous. Supabase and your host process IP addresses and request logs to operate and secure the service.
 - Expiry hides messages after one hour and cleanup deletes them within about five minutes after that. It does **not** guarantee removal from database backups, provider logs, or screenshots and copies other people made.
-- Country flags are only what a guest chooses to show; nothing is derived from IP or location. Mute lists, drafts and theme choices stay in the browser.
+- Country flags and gender labels are only what a guest chooses to show; nothing is derived from IP, location or anything else, and anyone can pick any option, so labels aren't proof of anything. Mute lists, drafts and theme choices stay in the browser.
 - Room stats count messages per hour and, per day, which guest sessions posted (to count people). Those per-day session rows are deleted after two days; hourly counts after 35 days.
 - Reported messages are copied into `reports` as evidence and kept until a moderator deletes the report. For a reported image, the file is kept while the report is `open`, then removed by the image cleanup.
 - Images: a signed link someone already opened keeps working until that message would have expired, even if the message is deleted early. Anyone in the room can also save an image while it's up.

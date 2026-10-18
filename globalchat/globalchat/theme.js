@@ -11,6 +11,7 @@
   var DEFAULTS = {
     theme: 'system', accent: 'violet', density: 'comfortable',
     sound: false, notify: false, soundAll: false, country: '', muted: [],
+    gender: '', genderAsked: false,
   };
   var THEMES = ['system', 'light', 'dark', 'amoled', 'contrast', 'neon'];
   // Variants are dark themes with their own tweaks.
@@ -32,6 +33,8 @@
     out.notify = Boolean(out.notify);
     out.soundAll = Boolean(out.soundAll);
     out.country = /^[A-Z]{2}$/.test(out.country) ? out.country : '';
+    out.gender = ['male', 'female', 'nonbinary'].indexOf(out.gender) >= 0 ? out.gender : '';
+    out.genderAsked = Boolean(out.genderAsked);
     out.muted = Array.isArray(out.muted)
       ? out.muted.filter(function (n) { return /^[A-Za-z]{2,20}_[0-9]{4}$/.test(n); }).slice(0, 200)
       : [];

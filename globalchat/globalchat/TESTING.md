@@ -195,6 +195,7 @@ After re-running `schema.sql` (and `check-setup.sql` shows all OK):
 - [ ] **Confetti:** someone sends "happy birthday" → confetti (not with reduced motion turned on).
 - [ ] **Install:** browser menu → Install / Add to Home Screen works on the deployed HTTPS site.
 - [ ] **Flags:** choose a country in settings: your flag shows on new messages, in the online list and in "Where people are".
+- [ ] **Gender label:** a fresh browser shows "Show your gender next to your name?" once; pick ♀ Female: the label appears on your identity card, on new messages and in the online list for others. Settings → "Don't show" removes it from new messages. Reloading doesn't ask again; Skip sets nothing.
 - [ ] **Stickers / voice:** + → Sticker sends a sticker. + → Voice note asks for the microphone, records up to 30 s, and plays for others.
 - [ ] **Commands:** `/roll`, `/roll 20`, `/flip`, `/8ball Will it rain?` come back with a "/roll" (etc.) badge. Typing "🎲 rolled 6" by hand gets no badge.
 - [ ] **Word filter:** a message with a listed word arrives masked (`f***`).

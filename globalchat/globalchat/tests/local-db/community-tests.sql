@@ -150,3 +150,13 @@ update public.messages set created_at = now() - interval '2 hours', expires_at =
 alter table public.messages enable trigger messages_block_update;
 select public.gc_cleanup();
 select count(*) from public.messages;
+
+\echo '--- G18 gender label: optional, normalised, junk dropped, bots never have one (expect female, nonbinary, null, null)'
+insert into auth.users(id) values ('88888888-0000-0000-0000-000000000010');
+set role authenticated;
+select set_config('request.jwt.claims','{"sub":"88888888-0000-0000-0000-000000000010","role":"authenticated","is_anonymous":true}',false);
+insert into public.messages(username, content, gender) values ('Lia_8000','hi, gender label test', ' Female ') returning gender;
+insert into public.messages(username, content, gender) values ('Lia_8000','second gender test', 'nonbinary') returning gender;
+insert into public.messages(username, content, gender) values ('Lia_8000','third gender test', 'attack helicopter') returning gender is null;
+insert into public.messages(username, content) values ('Lia_8000','fourth: no label') returning gender is null;
+reset role;
