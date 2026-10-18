@@ -72,7 +72,6 @@ const VOICE_TYPES = [
   ['audio/mp4', 'audio/mp4', 'm4a'],
 ];
 const EDIT_WINDOW_MS = 120_000;     // keep in sync with edit_window_seconds
-const NEW_USER_MS = 120_000;        // keep in sync with new_user_seconds (anti-spam)
 const ROOM_STATE_REFRESH_MS = 5 * 60_000;
 const DRAFT_KEY = 'globalchat.draft';
 const CONFETTI_WORDS = /\b(happy\s+birthday|hbd|congrats|congratulations|congratz)\b|🎉|🥳|🎂/i;
@@ -1336,7 +1335,6 @@ async function handleSendError(err, retried) {
       return 'The message you replied to is gone. Your message is still here; send it again.';
     }],
     ['INVALID_IMAGE', () => { clearPendingImage(); return 'That image couldn’t be sent. Try attaching it again.'; }],
-    ['NEW_USER_LIMIT', () => newUserText(err)],
     ['SLOW_MODE', () => {
       const secs = Number(/(\d+) seconds/.exec(err?.hint ?? '')?.[1]) || state.roomState?.slow_mode_seconds || 10;
       startCooldown(Date.now() + secs * 1000, slowLabel);
@@ -2045,7 +2043,6 @@ async function submitPoll(event) {
     else if (msg.includes('HOURLY_LIMIT')) fail('You’ve reached the hourly message limit for this session.');
     else if (msg.includes('BANNED')) fail('This guest session can’t post because of a moderation action.');
     else if (msg.includes('INVALID_POLL')) fail('Polls need a question and 2 to 4 different options of up to 80 characters.');
-    else if (msg.includes('NEW_USER_LIMIT')) fail(newUserText(err));
     else fail('The poll couldn’t be posted. Try again in a moment.');
   } finally {
     state.pollSending = false;
@@ -2092,7 +2089,6 @@ async function prepareImage(file) {
 async function attachImage(file) {
   setAttachOpen(false);
   if (!file || state.legacy || el.input.disabled) return;
-  if (newUserWait() > 0) { showComposerError(newUserText()); return; }
   try {
     const img = await prepareImage(file);
     clearPendingImage();
@@ -2664,7 +2660,6 @@ async function saveEdit() {
     console.warn('[GlobalChat] edit failed', err);
     if (msg.includes('EDIT_WINDOW_PASSED')) { cancelEdit({ keepText: true }); showComposerError('The 2-minute edit window has passed. Your text is still here if you want to send it as a new message.'); }
     else if (msg.includes('RATE_LIMITED')) showComposerError('Slow down a little and try again.');
-    else if (msg.includes('NEW_USER_LIMIT')) showComposerError(newUserText(err));
     else if (msg.includes('MESSAGE_NOT_FOUND')) { cancelEdit({ keepText: true }); showComposerError('That message is gone. Your text is still here.'); }
     else showComposerError('Couldn’t save the edit. Try again in a moment.');
   } finally {
@@ -2797,7 +2792,6 @@ async function postSpecial(row) {
 async function startVoice() {
   setAttachOpen(false);
   if (state.recorder || el.input.disabled) return;
-  if (newUserWait() > 0) { showComposerError(newUserText()); return; }
   if (!navigator.mediaDevices?.getUserMedia || !('MediaRecorder' in window)) {
     showComposerError('Voice notes aren’t supported in this browser.');
     return;
@@ -2895,22 +2889,6 @@ function renderVoice(node, m) {
   audio.hidden = false;
   audio.setAttribute('aria-label', `Voice note from ${displayName(m)}`);
   signedUrl(m).then((url) => { if (url) audio.src = url; });
-}
-
-// =============================================================================
-// New-user cooldown (anti-spam): the database refuses links, photos and voice
-// notes for a guest session's first 2 minutes. These helpers explain it and
-// stop an upload early instead of letting it fail after uploading.
-// =============================================================================
-function newUserWait() {
-  const created = Date.parse(state.session?.user?.created_at ?? '');
-  if (state.tier < 3 || Number.isNaN(created)) return 0;
-  return Math.max(0, Math.ceil((created + NEW_USER_MS - Date.now()) / 1000));
-}
-
-function newUserText(err) {
-  const secs = Number(/(\d+) seconds/.exec(err?.hint ?? '')?.[1]) || newUserWait() || 60;
-  return `New here? You can share links, photos and voice notes in ${secs}s. (This keeps spam bots out.) Plain messages work now.`;
 }
 
 // =============================================================================

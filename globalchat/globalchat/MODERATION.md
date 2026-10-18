@@ -116,7 +116,6 @@ order by created_at;
 - **Removing a message** (`delete from public.messages where id = '...'`) also removes its reactions and votes, tells every open page to hide it, and leaves the image for the cleanup to delete. Anyone who already had the image open can keep seeing it until it would have expired.
 - **Self-deletion.** Guests can delete their own messages before they expire. A report that was already filed keeps its evidence snapshot, so deleting doesn't help someone escape a report.
 - **Who reacted or voted** is in `public.reactions` / `public.poll_votes` (with `user_id`), readable only from the SQL Editor. Use it to spot vote-stuffing, e.g. many sessions created at once voting the same way.
-- **New-user cooldown**: guest sessions younger than 2 minutes can't post links, photos or voice notes (`new_user_seconds` in `gc_setting()`; set it higher, e.g. 600, during a spam wave, and re-run `schema.sql`).
 - **Limits** for reactions/votes (30 per minute) and image uploads (10 per 10 minutes) are in `gc_setting()` at the top of `schema.sql`.
 
 ## Admin page tips
