@@ -1589,6 +1589,53 @@ select.field { appearance: auto; }
 .muted-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .muted-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-radius: 10px; background: var(--surface-2); }
 
+/* Donations */
+.donate-button {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  background: linear-gradient(135deg, var(--accent-soft), transparent), var(--glass);
+  color: var(--text);
+  font-size: 0.875rem;
+  line-height: 1.35;
+  text-align: left;
+}
+.donate-button[hidden], [data-open-donate][hidden], .donate-about[hidden] { display: none; }
+.donate-button:hover { border-color: var(--accent); }
+.donate-button svg {
+  width: 30px; height: 30px; flex: none;
+  padding: 6px;
+  border-radius: 9px;
+  fill: #fff; stroke: none;
+  background: linear-gradient(45deg, #EC4899, var(--accent));
+}
+.donate-button strong { display: block; }
+.icon-button-heart svg { fill: currentColor; stroke: none; }
+.icon-button-heart { color: #EC4899; }
+.donate-upi, .donate-links { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.donate-upi[hidden], .donate-links[hidden] { display: none; }
+.donate-upi .side-heading { align-self: flex-start; }
+.donate-amounts { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.donate-amounts button {
+  min-width: 56px;
+  padding: 7px 12px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  font-weight: 700;
+}
+.donate-amounts button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.donate-qr { width: 232px; height: 232px; border-radius: 14px; background: #fff; image-rendering: pixelated; }
+.donate-qr-note { margin: 0; text-align: center; }
+.donate-pay { text-decoration: none; }
+@media (hover: hover) and (pointer: fine) { .donate-pay { display: none; } }   /* computers: scan the QR */
+@media (hover: none) { .donate-qr, .donate-qr-note { display: none; } }        /* phones: tap the button */
+.donate-id { margin: 0; font-size: 0.9375rem; overflow-wrap: anywhere; text-align: center; }
+.donate-id span { color: var(--muted); }
+.donate-links .button { width: 100%; text-decoration: none; }
+
 /* Confetti */
 .confetti { position: fixed; inset: 0; z-index: 45; width: 100vw; height: 100dvh; pointer-events: none; }
 .confetti[hidden] { display: none; }

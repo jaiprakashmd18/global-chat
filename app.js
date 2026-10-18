@@ -2980,6 +2980,123 @@ async function shareRoom() {
 }
 
 // =============================================================================
+// Donations (config.js → DONATE). Hidden unless the site owner filled it in.
+// =============================================================================
+const UPI_ID_RE = /^[A-Za-z0-9._-]{2,256}@[A-Za-z][A-Za-z0-9.-]{1,63}$/;
+
+function donateConfig() {
+  const d = CONFIG?.DONATE ?? {};
+  const upi = typeof d.UPI_ID === 'string' && UPI_ID_RE.test(d.UPI_ID.trim()) ? d.UPI_ID.trim() : '';
+  const name = (typeof d.UPI_NAME === 'string' && d.UPI_NAME.trim().slice(0, 50)) || 'GlobalChat';
+  const links = (Array.isArray(d.LINKS) ? d.LINKS : [])
+    .map((l) => {
+      try {
+        const url = new URL(String(l?.url ?? ''));
+        const label = String(l?.label ?? '').trim().slice(0, 40);
+        return url.protocol === 'https:' && label ? { label, url: url.href } : null;
+      } catch { return null; }
+    })
+    .filter(Boolean)
+    .slice(0, 4);
+  return { upi, name, links, enabled: Boolean(upi || links.length) };
+}
+
+function setupDonations() {
+  const cfg = donateConfig();
+  document.querySelectorAll('[data-open-donate], [data-donate-about]').forEach((n) => { n.hidden = !cfg.enabled; });
+  if (!cfg.enabled) return;
+
+  const dialog = $('donate-dialog');
+  document.querySelectorAll('[data-open-donate]').forEach((b) => b.addEventListener('click', () => {
+    b.closest('dialog')?.close();
+    dialog.showModal();
+    if (cfg.upi) renderUpi(cfg, currentAmount());
+  }));
+  dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
+
+  const upiBox = $('donate-upi');
+  upiBox.hidden = !cfg.upi;
+  if (cfg.upi) {
+    $('donate-upi-id').textContent = cfg.upi;
+    $('donate-copy').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(cfg.upi); toast('UPI ID copied.'); }
+      catch { toast(`UPI ID: ${cfg.upi}`); }
+    });
+    upiBox.querySelectorAll('[data-amount]').forEach((b) => b.addEventListener('click', () => {
+      upiBox.querySelectorAll('[data-amount]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+      renderUpi(cfg, b.dataset.amount);
+    }));
+  }
+
+  const linksBox = $('donate-links');
+  linksBox.hidden = cfg.links.length === 0;
+  linksBox.replaceChildren(...cfg.links.map(({ label, url }) => {
+    const a = document.createElement('a');
+    a.className = 'button button-quiet';
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.textContent = `${label} ↗`;
+    return a;
+  }));
+}
+
+function currentAmount() {
+  return $('donate-upi').querySelector('[data-amount][aria-pressed="true"]')?.dataset.amount ?? '';
+}
+
+// upi://pay link (NPCI format) + a QR code of the same link for computers.
+function renderUpi(cfg, amount) {
+  const params = new URLSearchParams({ pa: cfg.upi, pn: cfg.name, cu: 'INR', tn: 'Support GlobalChat' });
+  if (amount) params.set('am', `${Number(amount).toFixed(2)}`);
+  const link = `upi://pay?${params.toString().replace(/\+/g, '%20')}`;
+  $('donate-pay').href = link;
+  $('donate-pay').textContent = amount ? `Pay ₹${amount} with a UPI app` : 'Pay with a UPI app';
+  drawQr(link);
+}
+
+let qrLoading = null;
+function loadQrLibrary() {
+  // Self-hosted copy of qrcode-generator 1.4.4 (MIT, Kazuhiko Arase).
+  qrLoading ??= new Promise((resolve, reject) => {
+    if (window.qrcode) { resolve(window.qrcode); return; }
+    const s = document.createElement('script');
+    s.src = 'vendor/qrcode.js';
+    s.onload = () => (window.qrcode ? resolve(window.qrcode) : reject(new Error('qrcode missing')));
+    s.onerror = reject;
+    document.head.append(s);
+  });
+  return qrLoading;
+}
+
+async function drawQr(text) {
+  const canvas = $('donate-qr');
+  try {
+    const qrcode = await loadQrLibrary();
+    const qr = qrcode(0, 'M');
+    qr.addData(text);
+    qr.make();
+    const count = qr.getModuleCount();
+    const quiet = 3;
+    const cell = Math.floor(canvas.width / (count + quiet * 2));
+    const offset = Math.floor((canvas.width - cell * count) / 2);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#000';
+    for (let r = 0; r < count; r++) {
+      for (let c = 0; c < count; c++) {
+        if (qr.isDark(r, c)) ctx.fillRect(offset + c * cell, offset + r * cell, cell, cell);
+      }
+    }
+    canvas.dataset.qr = text;
+  } catch (err) {
+    console.warn('[GlobalChat] QR code unavailable', err);
+    canvas.hidden = true;
+  }
+}
+
+// =============================================================================
 // Toasts
 // =============================================================================
 function toast(text, tone) {
@@ -3019,6 +3136,7 @@ function wireUI() {
   });
 
   // Community features
+  setupDonations();
   buildCountrySelect();
   buildStickerPanel();
   renderWordOfDay();

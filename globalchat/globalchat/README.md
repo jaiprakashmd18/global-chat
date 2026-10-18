@@ -46,6 +46,7 @@ It's a static frontend (HTML, CSS, vanilla JS modules) on top of Supabase: anony
 - **Room stats** in the sidebar: messages and people today, this week, and the busiest hour in your time zone.
 - **Word of the day** from languages around the world.
 - **Share button** and a link-preview card (`og-image.png`) for WhatsApp, Instagram, X and others.
+- **Donations** 💜: fill in `DONATE` in `config.js` (a UPI ID for India and/or up to 4 links like Buy Me a Coffee, Ko-fi or PayPal) and a "Support GlobalChat" button appears in the sidebar, header and About. UPI shows a QR code on computers and a "Pay with a UPI app" button on phones, with ₹20 / ₹50 / ₹100 / ₹200 / any amount. Hidden while `DONATE` is empty. The QR library is self-hosted (`vendor/qrcode.js`, MIT).
 - **Translate** (⋯ → Translate): uses the browser's built-in translator when it has one (nothing leaves the device); otherwise it opens Google Translate in a new tab, which sends that message's text to Google.
 
 On phones, tap the online count to open **The room**: people online, flags, stats, question of the day and word of the day.
@@ -135,6 +136,7 @@ Design decisions worth knowing:
 | `stickers/` | The eight sticker images (SVG) |
 | `manifest.webmanifest`, `sw.js`, `icons/` | Installable app: manifest, service worker (page shell only), icons |
 | `og-image.png` | 1200×630 link-preview image |
+| `vendor/qrcode.js` | QR code generator for the UPI donation QR (qrcode-generator 1.4.4, MIT, Kazuhiko Arase) |
 | `config.js` | **Your** Supabase URL and public key (placeholders until you edit it) |
 | `schema.sql` | Complete database migration (run once; re-run to upgrade) |
 | `check-setup.sql` | Read-only checklist query: shows OK / MISSING for every database piece |

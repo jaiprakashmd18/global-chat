@@ -107,6 +107,10 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
           Appearance &amp; alerts
         </button>
+        <button type="button" class="donate-button" data-open-donate hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg>
+          <span><strong>Support GlobalChat</strong> Keep it free and ad-free</span>
+        </button>
         <a class="ig-link" href="https://www.instagram.com/global.chat_" target="_blank" rel="noopener noreferrer">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><path d="M17.5 6.5h.01"/></svg>
           <span><strong>Found a bug?</strong> Report it on Instagram <span class="ig-handle">@global.chat_</span></span>
@@ -133,6 +137,9 @@
         <div class="chat-head-meta">
           <button type="button" class="online-pill" id="online-pill" title="People online right now" data-open-people>
             <span class="presence-dot" aria-hidden="true"></span><span id="online-count">–</span><span class="visually-hidden"> online. Show who's here.</span>
+          </button>
+          <button type="button" class="icon-button icon-button-heart" data-open-donate aria-label="Support GlobalChat" title="Support GlobalChat" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg>
           </button>
           <button type="button" class="icon-button" id="share-button" aria-label="Share GlobalChat" title="Share">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="M8.2 10.8l7.6-4.4M8.2 13.2l7.6 4.4"/></svg>
@@ -423,6 +430,7 @@
         <p class="card-text" data-slot="wotd-meaning"></p>
       </div>
       <div class="dialog-actions">
+        <button type="button" class="button button-quiet" data-open-donate hidden>💜 Donate</button>
         <button type="button" class="button button-quiet needs-v3" data-open-rename>Change my name</button>
         <button type="button" class="button button-primary" data-close-dialog>Close</button>
       </div>
@@ -470,6 +478,11 @@
 
       <h3>Found a bug or have feedback?</h3>
       <p>Send us a message on Instagram: <a class="ig-inline" href="https://www.instagram.com/global.chat_" target="_blank" rel="noopener noreferrer">@global.chat_</a>. To report a harmful message, use <em>Report</em> on the message instead, so moderators get a copy of it.</p>
+
+      <div class="donate-about" data-donate-about hidden>
+        <h3>Support GlobalChat</h3>
+        <p>GlobalChat is free, with no ads and no sign-up. If you enjoy it, you can help pay for the servers. <button type="button" class="link-button" data-open-donate>Donate 💜</button></p>
+      </div>
 
       <h3>Your settings</h3>
       <p>Theme, colour, sounds, your flag choice, muted names and unsent drafts are stored only in this browser.</p>
@@ -544,6 +557,37 @@
         <button type="submit" class="button button-primary" id="rename-submit">Save</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- Donations (shown only when config.js has DONATE details) -->
+  <dialog class="dialog dialog-sm" id="donate-dialog" aria-labelledby="donate-title">
+    <div class="dialog-body">
+      <h2 class="dialog-title" id="donate-title">Support GlobalChat 💜</h2>
+      <p class="dialog-sub">GlobalChat is free, with no ads and no sign-up. Donations help pay for the servers. Thank you!</p>
+
+      <section class="donate-upi" id="donate-upi" hidden aria-labelledby="donate-upi-title">
+        <h3 class="side-heading" id="donate-upi-title">UPI (India)</h3>
+        <div class="donate-amounts" role="group" aria-label="Amount">
+          <button type="button" data-amount="20">₹20</button>
+          <button type="button" data-amount="50" aria-pressed="true">₹50</button>
+          <button type="button" data-amount="100">₹100</button>
+          <button type="button" data-amount="200">₹200</button>
+          <button type="button" data-amount="">Any</button>
+        </div>
+        <canvas class="donate-qr" id="donate-qr" width="232" height="232" role="img" aria-label="UPI QR code"></canvas>
+        <p class="side-note donate-qr-note">Scan with GPay, PhonePe, Paytm or any UPI app.</p>
+        <a class="button button-primary donate-pay" id="donate-pay" href="#">Pay with a UPI app</a>
+        <p class="donate-id"><span>UPI ID:</span> <strong id="donate-upi-id"></strong>
+          <button type="button" class="link-button" id="donate-copy">Copy</button></p>
+      </section>
+
+      <section class="donate-links" id="donate-links" hidden aria-label="Other ways to donate"></section>
+
+      <p class="side-note">Donations are voluntary and don't unlock anything. Please don't share payment details in the chat.</p>
+      <div class="dialog-actions">
+        <button type="button" class="button button-quiet" data-close-dialog>Close</button>
+      </div>
+    </div>
   </dialog>
 
   <!-- "More" menu for a message (positioned next to its ⋯ button) -->
