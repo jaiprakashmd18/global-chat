@@ -65,7 +65,6 @@ as $$
     when 'trivia_every_minutes'    then 15    -- new trivia question at most this often ...
     when 'trivia_answer_minutes'   then 5     -- ... and this long to answer it
     when 'trivia_quiet_minutes'    then 30    -- skip trivia if nobody posted for this long
-    when 'new_user_seconds'        then 120   -- brand-new guests: no links / photos / voice yet
   end;
 $$;
 
@@ -471,34 +470,6 @@ $$;
 revoke all on function public.gc_rate_check(uuid, text) from public, anon, authenticated;
 
 
--- Brand-new guest sessions can't post links, photos or voice notes for their
--- first `new_user_seconds`. Spam bots post right after signing in; people
--- usually read for a moment first. Returns seconds left (0 = allowed).
-create or replace function public.gc_new_user_wait(p_uid uuid)
-returns integer
-language sql
-stable
-security definer
-set search_path = ''
-as $$
-  select greatest(0, ceil(extract(epoch from (
-           u.created_at + make_interval(secs => public.gc_setting('new_user_seconds')) - now())))::integer)
-  from auth.users u
-  where u.id = p_uid;
-$$;
-
--- Does the text contain a link (http/https, www., or a bare domain)?
-create or replace function public.gc_has_link(p_text text)
-returns boolean
-language sql
-immutable
-set search_path = ''
-as $$
-  select coalesce(p_text, '') ~* '(https?://|www\.|\m[a-z0-9-]+\.(com|net|org|io|co|in|me|ly|gg|xyz|ru|cn|top|info|biz|app|dev|site|online|shop|click|link|live|tk|ml|ga|cf|gq|tv|to|cc|su|pw|zip|mov)\M)';
-$$;
-
-revoke all on function public.gc_new_user_wait(uuid) from public, anon, authenticated;
-
 -- Mask blocked words: "fuck" -> "f***" (whole words, any case).
 create or replace function public.gc_mask_words(p_text text)
 returns text
@@ -804,17 +775,6 @@ begin
   -- 4b2. Word filter (command results are server text and stay as they are,
   --      except an 8-ball question, which is masked like any text).
   new.content := public.gc_mask_words(new.content);
-
-  -- 4b3. New-user cooldown: no links, photos or voice notes in the first
-  --      minutes of a guest session (stops most spam bots).
-  if (new.kind in ('image', 'voice')
-      or public.gc_has_link(new.content)
-      or public.gc_has_link(array_to_string(new.poll_options, ' ')))
-     and coalesce(public.gc_new_user_wait(v_uid), 0) > 0 then
-    raise exception 'NEW_USER_LIMIT' using errcode = 'P0001',
-      hint = format('New here? You can share links, photos and voice notes in %s seconds.',
-                    public.gc_new_user_wait(v_uid));
-  end if;
 
   -- 4c. Replies must point at a message that is still visible.
   if new.reply_to is not null and not exists (
@@ -1855,10 +1815,6 @@ begin
   if char_length(v_text) > public.gc_setting('max_message_length') then
     raise exception 'MESSAGE_TOO_LONG' using errcode = 'P0001';
   end if;
-  if public.gc_has_link(v_text) and coalesce(public.gc_new_user_wait(v_uid), 0) > 0 then
-    raise exception 'NEW_USER_LIMIT' using errcode = 'P0001',
-      hint = format('New here? You can share links in %s seconds.', public.gc_new_user_wait(v_uid));
-  end if;
   perform public.gc_rate_check(v_uid, 'edit');
   v_text := public.gc_mask_words(v_text);
 
@@ -2095,6 +2051,13 @@ grant execute on function public.gc_mod_pin(uuid)                      to authen
 grant execute on function public.gc_mod_set_slow_mode(integer)         to authenticated;
 grant execute on function public.gc_mod_set_hidden(uuid, boolean)      to authenticated;
 grant execute on function public.gc_mod_ban_author(uuid, integer, text) to authenticated;
+
+
+-- Removed feature: the new-user cooldown. If an earlier run of this file
+-- created its helpers, drop them (the trigger and gc_edit_message above no
+-- longer call them).
+drop function if exists public.gc_new_user_wait(uuid);
+drop function if exists public.gc_has_link(text);
 
 
 -- -----------------------------------------------------------------------------

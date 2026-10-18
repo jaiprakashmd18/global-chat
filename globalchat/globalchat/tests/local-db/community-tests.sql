@@ -150,21 +150,3 @@ update public.messages set created_at = now() - interval '2 hours', expires_at =
 alter table public.messages enable trigger messages_block_update;
 select public.gc_cleanup();
 select count(*) from public.messages;
-
-\echo '--- G17 new-user cooldown: a 10-second-old guest can chat, but not post links, photos or voice yet (expect ok, NEW_USER_LIMIT x4)'
-insert into auth.users(id, created_at) values ('66666666-0000-0000-0000-00000000000f', now() - interval '10 seconds');
-set role authenticated;
-select set_config('request.jwt.claims','{"sub":"66666666-0000-0000-0000-00000000000f","role":"authenticated","is_anonymous":true}',false);
-insert into public.messages(username, content) values ('Newbie_6000','hello everyone!') returning content;
-insert into public.messages(username, content) values ('Newbie_6000','free crypto at https://scam.example');
-insert into public.messages(username, content) values ('Newbie_6000','visit cheapfollowers.xyz now');
-insert into storage.objects(bucket_id, name) values ('chat-images','66666666-0000-0000-0000-00000000000f/cccccccc-cccc-cccc-cccc-cccccccccccc.png');
-insert into public.messages(username, content, kind, image_path) values ('Newbie_6000','', 'image', '66666666-0000-0000-0000-00000000000f/cccccccc-cccc-cccc-cccc-cccccccccccc.png');
-select public.gc_edit_message((select id from public.messages where content = 'hello everyone!'), 'hello www.spam.example');
-\echo '--- G17b after the cooldown the same guest can post a link (expect the link text)'
-reset role;
-update auth.users set created_at = now() - interval '3 minutes' where id = '66666666-0000-0000-0000-00000000000f';
-set role authenticated;
-select set_config('request.jwt.claims','{"sub":"66666666-0000-0000-0000-00000000000f","role":"authenticated","is_anonymous":true}',false);
-insert into public.messages(username, content) values ('Newbie_6000','my blog: https://example.org') returning content;
-reset role;
