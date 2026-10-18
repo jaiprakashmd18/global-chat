@@ -116,6 +116,7 @@ order by created_at;
 - **Removing a message** (`delete from public.messages where id = '...'`) also removes its reactions and votes, tells every open page to hide it, and leaves the image for the cleanup to delete. Anyone who already had the image open can keep seeing it until it would have expired.
 - **Self-deletion.** Guests can delete their own messages before they expire. A report that was already filed keeps its evidence snapshot, so deleting doesn't help someone escape a report.
 - **Who reacted or voted** is in `public.reactions` / `public.poll_votes` (with `user_id`), readable only from the SQL Editor. Use it to spot vote-stuffing, e.g. many sessions created at once voting the same way.
+- **Gender labels** are self-chosen and optional. If people get harassed because of their label, that's a normal report: delete, ban, or turn on slow mode.
 - **Limits** for reactions/votes (30 per minute) and image uploads (10 per 10 minutes) are in `gc_setting()` at the top of `schema.sql`.
 
 ## Admin page tips

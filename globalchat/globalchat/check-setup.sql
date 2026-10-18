@@ -46,6 +46,7 @@ from (values
   ('gc_edit_message()',                 to_regprocedure('public.gc_edit_message(uuid,text)') is not null),
   ('gc_rename()',                       to_regprocedure('public.gc_rename(text)') is not null),
   ('moderator functions',               to_regprocedure('public.gc_mod_ban_author(uuid,integer,text)') is not null),
+  ('messages.gender column (labels)',   exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'messages' and column_name = 'gender')),
   ('voice notes allowed in bucket',     exists (select 1 from storage.buckets where id = 'chat-images' and 'audio/webm' = any (allowed_mime_types)))
 ) as checks(item, ok);
 

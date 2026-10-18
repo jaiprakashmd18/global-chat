@@ -54,7 +54,7 @@
         <p class="side-heading">You're chatting as</p>
         <div class="identity-row">
           <span class="avatar avatar-lg" id="side-avatar" aria-hidden="true">?</span>
-          <strong class="identity-name"><span id="side-username">Joining…</span> <span class="flag" id="side-flag"></span></strong>
+          <strong class="identity-name"><span id="side-username">Joining…</span> <span class="flag" id="side-flag"></span> <span class="gender-chip" id="side-gender" hidden></span></strong>
         </div>
         <p class="side-note">A name for this tab only. Close the tab and it's gone.</p>
         <button type="button" class="link-button needs-v3" data-open-rename>Change name</button>
@@ -193,6 +193,16 @@
       <div class="notice notice-warn" id="setup-notice" role="status" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9.5 17h-19L12 3z"/><path d="M12 10v4M12 17h.01"/></svg>
         <p><strong id="setup-notice-title">Photos, polls, replies and reactions are switched off</strong> because this site's database hasn't been upgraded yet. Site owner: run <code>schema.sql</code> again in Supabase, then <code>check-setup.sql</code> to confirm.</p>
+      </div>
+
+      <div class="notice gender-ask needs-v4" id="gender-ask" role="group" aria-labelledby="gender-ask-title" hidden>
+        <p><strong id="gender-ask-title">Show your gender next to your name?</strong> <span>Optional. Change it any time in Appearance &amp; alerts.</span></p>
+        <div class="gender-ask-options">
+          <button type="button" class="button button-quiet button-sm" data-gender="male">♂ Male</button>
+          <button type="button" class="button button-quiet button-sm" data-gender="female">♀ Female</button>
+          <button type="button" class="button button-quiet button-sm" data-gender="nonbinary">⚧ Non-binary</button>
+          <button type="button" class="link-button" data-gender="">Skip</button>
+        </div>
       </div>
 
       <div class="notice" id="privacy-notice" hidden>
@@ -395,6 +405,17 @@
         <p class="setting-note setting-note-quiet">Shown next to your name on new messages and in "Where people are". Nobody sees it unless you pick one.</p>
       </fieldset>
 
+      <fieldset class="setting needs-v4">
+        <legend>Your gender <span class="optional">Optional</span></legend>
+        <div class="segmented segmented-wrap">
+          <label><input type="radio" name="gender" value=""><span>Don't show</span></label>
+          <label><input type="radio" name="gender" value="male"><span>♂ Male</span></label>
+          <label><input type="radio" name="gender" value="female"><span>♀ Female</span></label>
+          <label><input type="radio" name="gender" value="nonbinary"><span>⚧ Non-binary</span></label>
+        </div>
+        <p class="setting-note setting-note-quiet">Shown next to your name on new messages and in the online list. Nobody sees it unless you pick one.</p>
+      </fieldset>
+
       <fieldset class="setting">
         <legend>Muted people</legend>
         <ul class="muted-list" id="muted-list"></ul>
@@ -468,7 +489,7 @@
       <p>Type <em>/roll</em>, <em>/roll 20</em>, <em>/flip</em> or <em>/8ball your question</em>: the server rolls the dice, so nobody can fake a result. Formatting: <em>*bold*</em>, <em>_italic_</em>, <em>`code`</em> and <em>||spoiler||</em>. The room bot posts a question of the day and, while people are chatting, a trivia question every 15 minutes. First right answer wins.</p>
 
       <h3>Voice notes, stickers and flags</h3>
-      <p>Voice notes (up to 30 seconds) are stored privately like photos and deleted after their message. Your country flag is optional, chosen by you in settings, and never detected from your location.</p>
+      <p>Voice notes (up to 30 seconds) are stored privately like photos and deleted after their message. Your country flag and gender label are optional, chosen by you in settings, and never detected or guessed. Don't trust a label: anyone can pick any option.</p>
 
       <h3>Editing, muting, translating</h3>
       <p>You can edit a text message for 2 minutes after sending it; edited messages are marked. Muting someone hides their messages only on your screen. Translate uses your browser's built-in translator when it has one; otherwise it opens Google Translate in a new tab, which sends that message's text to Google.</p>
@@ -608,6 +629,7 @@
         <div class="msg-head">
           <button type="button" class="msg-name"></button>
           <span class="flag msg-flag" hidden></span>
+          <span class="gender-chip msg-gender" hidden></span>
           <span class="msg-you" hidden>you</span>
           <span class="msg-badge" hidden></span>
           <time class="msg-time"></time>

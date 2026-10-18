@@ -1050,7 +1050,10 @@ kbd {
 /* Features that need the upgraded database are hidden until it's detected. */
 [data-features="legacy"] .needs-v2,
 [data-features="legacy"] .needs-v3,
-[data-features="v2"] .needs-v3 { display: none !important; }
+[data-features="legacy"] .needs-v4,
+[data-features="v2"] .needs-v3,
+[data-features="v2"] .needs-v4,
+[data-features="v3"] .needs-v4 { display: none !important; }
 
 /* Reply / image context above the message box */
 .composer-context {
@@ -1416,6 +1419,30 @@ kbd {
 .msg-badge[hidden], .msg-edited[hidden], .msg-left[hidden] { display: none; }
 .msg-edited, .msg-left { font-size: 0.75rem; color: var(--muted); }
 .msg-left::before { content: "· "; }
+
+/* Gender label: neutral styling, same for every option */
+.gender-chip {
+  display: inline-grid; place-items: center;
+  min-width: 18px; height: 18px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: middle;
+}
+.gender-chip[hidden] { display: none; }
+.identity-name .gender-chip { font-size: 0.875rem; height: 22px; min-width: 22px; }
+
+.gender-ask { flex-direction: column; align-items: stretch; gap: 8px; }
+.gender-ask[hidden] { display: none; }
+.gender-ask p { color: var(--text); }
+.gender-ask p span { color: var(--muted); }
+.gender-ask-options { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.segmented-wrap { flex-wrap: wrap; }
+.segmented-wrap label { flex: 1 1 40%; }
 
 /* Formatting */
 .msg-text strong { font-weight: 700; }

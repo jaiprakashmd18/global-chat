@@ -125,6 +125,11 @@ alter table public.messages alter column user_id drop not null;
 alter table public.messages drop constraint if exists messages_author_present;
 alter table public.messages add constraint messages_author_present
   check (is_bot or user_id is not null);
+-- Optional gender label the guest chose to show (never required).
+alter table public.messages add column if not exists gender text;
+alter table public.messages drop constraint if exists messages_gender_valid;
+alter table public.messages add constraint messages_gender_valid
+  check (gender is null or gender in ('male', 'female', 'nonbinary'));
 alter table public.messages drop constraint if exists messages_country_format;
 alter table public.messages add constraint messages_country_format
   check (country is null or country ~ '^[A-Z]{2}$');
@@ -645,6 +650,7 @@ begin
     new.poll_options := null;
     new.sticker      := null;
     new.country      := null;
+    new.gender       := null;
     new.command      := null;
     new.edited_at    := null;
     new.hidden       := false;
@@ -676,6 +682,10 @@ begin
   new.country   := nullif(upper(btrim(coalesce(new.country, ''))), '');
   if new.country !~ '^[A-Z]{2}$' then
     new.country := null;
+  end if;
+  new.gender := lower(btrim(coalesce(new.gender, '')));
+  if new.gender not in ('male', 'female', 'nonbinary') then
+    new.gender := null;
   end if;
 
   -- 4. Content: normalise, then validate.
@@ -925,6 +935,7 @@ begin
           'command',      new.command,
           'sticker',      new.sticker,
           'country',      new.country,
+          'gender',       new.gender,
           'edited_at',    new.edited_at
         ),
         'message_created',
@@ -1062,11 +1073,11 @@ grant select, insert, delete on public.blocked_words to authenticated;
 -- Guests read the public columns only — user_id is never readable via the API.
 grant select (id, username, content, created_at, expires_at,
               kind, reply_to, image_path, poll_options,
-              is_bot, command, sticker, country, edited_at, hidden)
+              is_bot, command, sticker, country, edited_at, hidden, gender)
   on public.messages to authenticated;
 -- Guests supply only these; the trigger validates them and sets the rest.
 grant insert (username, content, kind, reply_to, image_path, poll_options,
-              sticker, country)
+              sticker, country, gender)
   on public.messages to authenticated;
 -- Deletion is granted but RLS limits it to moderators.
 grant delete on public.messages to authenticated;
@@ -1927,7 +1938,7 @@ begin
         'created_at', v_msg.created_at, 'expires_at', v_msg.expires_at, 'kind', v_msg.kind,
         'reply_to', v_msg.reply_to, 'image_path', v_msg.image_path, 'poll_options', v_msg.poll_options,
         'is_bot', v_msg.is_bot, 'command', v_msg.command, 'sticker', v_msg.sticker,
-        'country', v_msg.country, 'edited_at', v_msg.edited_at),
+        'country', v_msg.country, 'gender', v_msg.gender, 'edited_at', v_msg.edited_at),
         'message_created', 'room:global', true);
     end if;
   exception when others then
