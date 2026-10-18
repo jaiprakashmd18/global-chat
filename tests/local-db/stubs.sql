@@ -3,7 +3,7 @@ do $$ begin create role anon nologin; exception when duplicate_object then null;
 do $$ begin create role authenticated nologin; exception when duplicate_object then null; end $$;
 create schema auth; create schema realtime;
 grant usage on schema auth, realtime, public to anon, authenticated;
-create table auth.users (id uuid primary key, is_anonymous boolean default true, created_at timestamptz default now());
+create table auth.users (id uuid primary key, is_anonymous boolean default true, created_at timestamptz default now() - interval '1 day');  -- test guests are a day old unless a test says otherwise
 create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims', true),''),'{}')::jsonb $$;
 create function auth.uid() returns uuid language sql stable as $$ select nullif(auth.jwt()->>'sub','')::uuid $$;
 grant execute on all functions in schema auth to anon, authenticated;
