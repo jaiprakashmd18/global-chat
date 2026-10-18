@@ -28,7 +28,7 @@ Presence and typing use the existing Realtime presence permission. Replies, reac
 ### Upgrading an existing GlobalChat
 
 1. Dashboard → **SQL Editor** → **New query** → paste **all** of `schema.sql` → **Run**. It's safe to re-run: new columns and tables are added in place and existing messages are kept. If the editor asks you to confirm destructive operations or RLS, choose to run the query. If it shows an **error**, nothing was applied (the whole script rolls back); fix or report that first error and run it again.
-2. Open another **New query**, paste `check-setup.sql`, **Run**. Every row should say **OK**. Until they do, the site shows a yellow "switched off" notice and hides the new buttons.
+2. Open another **New query**, paste `check-setup.sql`, **Run**. Every row should say **OK**. If the `messages.*` column rows are MISSING, the site shows a yellow "switched off" notice and hides the new buttons. If only the storage rows (bucket, storage policies) are MISSING, everything else works but sending a photo fails with "Image sharing isn't set up on this server yet".
 3. Deploy the `cleanup-images` Edge Function and schedule it ([step 9b](#9b-image-cleanup-edge-function)). Paste the code from this repo; don't keep Supabase's "Hello" template.
 4. Redeploy the site (the security headers now allow images from `*.supabase.co`).
 
