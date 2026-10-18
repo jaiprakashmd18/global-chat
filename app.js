@@ -2116,7 +2116,7 @@ function clearPendingImage({ sent = false } = {}) {
   if (img.path && !sent) state.sb?.storage.from(IMAGE_BUCKET).remove([img.path]).catch(() => {});
   el.imageBar.hidden = true;
   el.imageThumb.removeAttribute('src');
-  el.input.placeholder = 'Message everyone…';
+  el.input.placeholder = matchMedia('(max-width: 379px)').matches ? 'Message…' : 'Message everyone…';
   updateComposer();
 }
 
@@ -2487,7 +2487,12 @@ function openMoreMenu(id, anchor) {
   }
   if (mine && state.tier >= 2) items.push(['🗑️ Delete', () => openDelete(id), 'danger']);
   if (!items.length) return;
+  showMenu(items, anchor, id);
+}
 
+// Show the floating menu with [label, action, tone] items next to `anchor`.
+function showMenu(items, anchor, key) {
+  const menu = el.moreMenu;
   menu.replaceChildren(...items.map(([label, action, tone]) => {
     const b = document.createElement('button');
     b.type = 'button';
@@ -2497,7 +2502,7 @@ function openMoreMenu(id, anchor) {
     b.addEventListener('click', () => { closeMoreMenu(); action(); });
     return b;
   }));
-  menu.dataset.for = id;
+  menu.dataset.for = key;
   menu.hidden = false;
   const r = anchor.getBoundingClientRect();
   const left = Math.min(Math.max(8, r.right - menu.offsetWidth), window.innerWidth - menu.offsetWidth - 8);
@@ -2505,6 +2510,17 @@ function openMoreMenu(id, anchor) {
   menu.style.left = `${left}px`;
   menu.style.top = `${below ? r.bottom + 6 : Math.max(8, r.top - menu.offsetHeight - 6)}px`;
   menu.firstElementChild.focus({ preventScroll: true });
+}
+
+// Phones: Share, Appearance and About live in a header menu so the title fits.
+function openHeadMenu(anchor) {
+  if (!el.moreMenu.hidden && el.moreMenu.dataset.for === 'head') { closeMoreMenu(); return; }
+  const items = [
+    ['🔗 Share GlobalChat', shareRoom],
+    ['🎨 Appearance & alerts', () => { fillSettingsForm(); el.settingsDialog.showModal(); }],
+    ['ℹ️ Privacy and how it works', () => el.aboutDialog.showModal()],
+  ];
+  showMenu(items, anchor, 'head');
 }
 
 function closeMoreMenu() {
@@ -3145,6 +3161,26 @@ function wireUI() {
   restoreDraft();
   setInterval(loadRoomState, ROOM_STATE_REFRESH_MS);
   el.shareButton.addEventListener('click', shareRoom);
+  document.getElementById('head-menu').addEventListener('click', (e) => openHeadMenu(e.currentTarget));
+
+  // Touch screens: tap a message to show its actions (they float over it, so
+  // bubbles keep their full width). Tap elsewhere to hide them again.
+  el.list.addEventListener('click', (e) => {
+    if (!matchMedia('(hover: none), (max-width: 599px)').matches) return;
+    if (e.target.closest('button, a, audio, input, .spoiler, .msg-actions')) return;
+    const msg = e.target.closest('.msg:not([data-local])');
+    const wasSelected = msg?.classList.contains('is-selected');
+    el.list.querySelectorAll('.msg.is-selected').forEach((n) => n.classList.remove('is-selected'));
+    if (msg && !wasSelected) msg.classList.add('is-selected');
+  });
+
+  // A shorter placeholder on narrow screens so it doesn't wrap.
+  const narrow = matchMedia('(max-width: 379px)');
+  const setPlaceholder = () => {
+    if (!state.pendingImage) el.input.placeholder = narrow.matches ? 'Message…' : 'Message everyone…';
+  };
+  narrow.addEventListener('change', setPlaceholder);
+  setPlaceholder();
   el.editCancel.addEventListener('click', () => { cancelEdit(); el.input.focus(); });
   el.attachSticker.addEventListener('click', () => setStickerOpen(true));
   el.attachVoice.addEventListener('click', startVoice);
@@ -3208,7 +3244,7 @@ function wireUI() {
     if (!el.emojiPanel.hidden && !e.target.closest('.emoji-wrap')) setEmojiOpen(false);
     if (!el.attachMenu.hidden && !e.target.closest('#attach-menu, #attach-toggle')) setAttachOpen(false);
     if (!el.reactionPicker.hidden && !e.target.closest('#reaction-picker, .msg-react')) closeReactionPicker();
-    if (!el.moreMenu.hidden && !e.target.closest('#more-menu, .msg-more')) closeMoreMenu();
+    if (!el.moreMenu.hidden && !e.target.closest('#more-menu, .msg-more, #head-menu')) closeMoreMenu();
     if (!el.stickerPanel.hidden && !e.target.closest('#sticker-panel, #attach-sticker')) setStickerOpen(false);
   });
   window.addEventListener('resize', closeMoreMenu);
