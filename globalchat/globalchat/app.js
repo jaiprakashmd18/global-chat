@@ -38,6 +38,13 @@ const BASE_TITLE = document.title;
 const EMOJI = ['😀', '😂', '🥹', '😊', '😍', '🤩', '😎', '🤔', '😅', '😭', '😮', '😴', '🙃', '😬', '🥳', '🤯',
   '👍', '👎', '👏', '🙌', '🙏', '👋', '🤝', '💪', '❤️', '🔥', '✨', '🎉', '💯', '✅', '👀', '🌍',
   '☕', '🍕', '🎵', '🎮', '🌙', '☀️', '🌈', '🚀'];
+// Room bot: welcome replies when you post into an empty room. Shown only in
+// your own tab, never stored or sent to anyone, and always labelled.
+const BOT_NAME = 'GlobalChat Bot';
+const BOT_MAX_PER_TAB = 3;
+const BOT_DELAY_MS = 1100;
+const JOIN_NOTE_AFTER_MS = 5000;    // ignore presence flicker right after joining
+
 const STARTERS = ['Hello from somewhere 👋', 'What time is it where you are?', 'What are you listening to right now?'];
 
 // Links and @mentions inside message text. Usernames follow the server rule.
@@ -177,6 +184,9 @@ const state = {
   deleteTarget: null,
   pollSending: false,
   atBottom: true,
+  aloneSince: null,              // when this tab became the only one online
+  botRepliedWhileAlone: false,
+  botReplies: 0,
   timeFormat: new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }),
   fullFormat: new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }),
 };
@@ -638,6 +648,7 @@ function buildNode(m) {
   const expires = new Date(m.expires_at);
 
   node.dataset.id = m.id;
+  node.dataset.time = String(createdMs(m));
   const hue = String(hueFor(m.username));
   paintAvatar(node.querySelector('.avatar'), m.username);
   const name = node.querySelector('.msg-name');
@@ -690,8 +701,10 @@ function applyMine(node, mine) {
 function insertMessage(m) {
   const node = buildNode(m);
   // Most messages are newest: walk back from the end to find the slot.
+  // (Uses each element's stored time, so local bot notes and messages that
+  // are fading out after removal sort correctly too.)
   let after = el.list.lastElementChild;
-  while (after && createdMs(state.messages.get(after.dataset.id).data) > createdMs(m)) {
+  while (after && Number(after.dataset.time) > createdMs(m)) {
     after = after.previousElementSibling;
   }
   if (after) after.after(node); else el.list.prepend(node);
@@ -757,6 +770,7 @@ function trimOverflow() {
   while (state.messages.size > MAX_RENDERED) {
     const first = el.list.firstElementChild;
     if (!first) break;
+    if (!state.messages.has(first.dataset.id)) { first.remove(); continue; }  // bot note / fading node
     removeMessage(first.dataset.id, { animate: false, gone: false });
   }
 }
@@ -934,7 +948,7 @@ function showFeedState(kind, detail) {
 function updateFeedState() {
   if (!state.historyLoaded) return;
   if (state.messages.size === 0) showFeedState('empty');
-  else if (state.filter && !el.list.querySelector('.msg:not([hidden])')) showFeedState('no-results');
+  else if (state.filter && !el.list.querySelector('.msg:not([hidden]):not([data-local])')) showFeedState('no-results');
   else el.feedState.replaceChildren();
 }
 
@@ -1079,6 +1093,7 @@ function afterPosted(data) {
   if (data.username !== state.username) setUsername(data.username);
   upsertMessages([data], { initial: false });
   scrollToBottom();
+  maybeBotReply();
 }
 
 async function handleSendError(err, retried) {
@@ -1299,6 +1314,7 @@ function syncPeople(presence) {
   renderOnline(people.length);
   renderPeople();
   renderTyping();
+  noteJoinsWhileAlone(people);
 }
 
 function renderPeople() {
@@ -1971,6 +1987,96 @@ function featureError(error, id) {
   else if (msg.includes('MESSAGE_NOT_FOUND')) { toast('That message has expired or was removed.'); removeMessage(id); }
   else if (msg.includes('BANNED')) toast('This guest session is blocked by a moderator.', 'danger');
   else toast('That didn’t work. Try again in a moment.', 'danger');
+}
+
+// =============================================================================
+// Room bot (local only) + "someone joined" notes
+// =============================================================================
+const isAlone = () => state.connection === 'live'
+  && state.people.length === 1 && state.people[0].key === state.presenceKey;
+
+function botLines(name) {
+  const tag = `@${name}`;
+  const lines = [
+    `Hey ${tag} 👋 You're the only one online right now, but your message is live. It stays up for an hour, so the next person who drops in will see it.`,
+    `Hi ${tag}! It's quiet at the moment. Want company? Share the room with a friend: ${location.origin}${location.pathname}`,
+    `Welcome ${tag} 🌍 You're first in! While you wait, tell the room where you're writing from, or what time it is there.`,
+  ];
+  if (!state.legacy) {
+    lines.push(`Nice one ${tag}! Nobody else is here yet. Tip: start a poll with the + button, and people can vote as soon as they arrive.`);
+  }
+  return lines;
+}
+
+function maybeBotReply() {
+  if (state.botRepliedWhileAlone || state.botReplies >= BOT_MAX_PER_TAB || !isAlone()) return;
+  state.botRepliedWhileAlone = true;
+  state.botReplies++;
+  setTimeout(() => {
+    if (!isAlone()) return;   // someone arrived meanwhile: let them answer
+    const lines = botLines(state.username);
+    addLocalNote('bot', lines[randomInt(lines.length)]);
+  }, BOT_DELAY_MS);
+}
+
+function noteJoinsWhileAlone(people) {
+  const others = people.filter((p) => p.key !== state.presenceKey);
+  if (others.length === 0) {
+    state.aloneSince ??= Date.now();
+    return;
+  }
+  if (state.aloneSince && state.historyLoaded && Date.now() - state.aloneSince > JOIN_NOTE_AFTER_MS) {
+    const name = others.find((p) => p.name)?.name;
+    addLocalNote('join', `${name ?? 'Someone'} just joined. Say hi 👋`);
+  }
+  state.aloneSince = null;
+  state.botRepliedWhileAlone = false;
+}
+
+function addLocalNote(kind, text) {
+  const li = document.createElement('li');
+  li.dataset.local = kind;
+  li.dataset.time = String(Date.now());
+  if (kind === 'bot') {
+    li.className = 'msg is-bot';
+    const avatar = document.createElement('span');
+    avatar.className = 'avatar avatar-bot';
+    avatar.setAttribute('aria-hidden', 'true');
+    avatar.textContent = '🤖';
+    const main = document.createElement('div');
+    main.className = 'msg-main';
+    const head = document.createElement('div');
+    head.className = 'msg-head';
+    const name = document.createElement('span');
+    name.className = 'msg-name msg-name-bot';
+    name.textContent = BOT_NAME;
+    const badge = document.createElement('span');
+    badge.className = 'msg-you msg-bot-badge';
+    badge.textContent = 'auto';
+    head.append(name, badge);
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-bubble';
+    const p = document.createElement('p');
+    p.className = 'msg-text';
+    renderRichText(p, text);
+    bubble.append(p);
+    const note = document.createElement('p');
+    note.className = 'msg-bot-note';
+    note.textContent = 'Automatic message · only you can see this';
+    main.append(head, bubble, note);
+    li.append(avatar, main);
+  } else {
+    li.className = 'room-note';
+    li.setAttribute('role', 'status');
+    const span = document.createElement('span');
+    span.textContent = text;
+    li.append(span);
+  }
+  const stick = isNearBottom();
+  el.list.append(li);
+  regroup(li.nextElementSibling);
+  if (stick) scrollToBottom();
+  else { state.unseen++; showJump(); }
 }
 
 // =============================================================================

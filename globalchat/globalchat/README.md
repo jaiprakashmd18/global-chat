@@ -19,6 +19,7 @@ It's a static frontend (HTML, CSS, vanilla JS modules) on top of Supabase: anony
 - **Polls**: ask a question with 2–4 options; results update live and you can change or undo your vote. Votes are anonymous.
 - **Photos and GIFs**: attach, paste or drag in an image (PNG, JPG, WebP, GIF, up to 5 MB). Photos are resized and re-saved in the browser first, which strips hidden metadata like GPS location. Images are stored privately and disappear with their message.
 - **Delete your own message** at any time before it expires.
+- **Welcome bot for an empty room**: if you post while nobody else is online, a clearly labelled "GlobalChat Bot" replies after a second (once per quiet spell, at most 3 per tab). When someone then joins, a small "… just joined. Say hi 👋" note appears. Both exist only in your own tab: they're never stored or shown to anyone else.
 - **Emoji picker**, **message search**, **copy message**, **unread count in the tab title**, and quick conversation starters when the room is empty.
 - **Fading messages**: messages fade slightly in their last five minutes before they disappear.
 - Keyboard: <kbd>/</kbd> focuses the message box, <kbd>Esc</kbd> closes search and the emoji picker.

@@ -739,6 +739,32 @@ kbd {
 .reaction-picker button:hover, .reaction-picker button:focus-visible { background: var(--surface-2); transform: scale(1.15); }
 .reaction-picker button.is-mine { background: var(--accent-soft); }
 
+/* Local bot replies and "someone joined" notes (never stored or shared) */
+.avatar-bot { background: var(--accent-soft); font-size: 1.1rem; }
+.msg-name-bot { color: var(--hl); cursor: default; }
+.msg-name-bot:hover { text-decoration: none; }
+.msg-bot-badge { background: var(--surface-3); color: var(--muted); }
+.msg.is-bot .msg-bubble {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--bubble-other);
+}
+.msg.is-bot:not(.is-continued) .avatar { margin-top: 22px; }
+.msg-bot-note { margin: 4px 0 0 4px; font-size: 0.75rem; color: var(--muted); }
+.room-note {
+  display: flex; justify-content: center;
+  margin: var(--msg-gap) 0;
+  animation: msg-in 220ms ease-out;
+}
+.room-note span {
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+.message-list.is-filtering [data-local] { display: none; }
+
 /* Last few minutes before a message disappears */
 .msg.is-fading .msg-bubble { opacity: 0.55; }
 .msg.is-expiring { opacity: 0; transition: opacity 400ms ease; }
