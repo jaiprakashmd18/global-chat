@@ -352,6 +352,30 @@ kbd {
 
 .side-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding: 4px; margin-top: auto; }
 
+/* Instagram link for bug reports */
+.ig-link {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--line);
+  background: var(--glass);
+  color: var(--text);
+  font-size: 0.875rem;
+  line-height: 1.35;
+  text-decoration: none;
+}
+.ig-link:hover { border-color: var(--line-strong); background: var(--surface-2); }
+.ig-link svg {
+  width: 30px; height: 30px; flex: none;
+  padding: 5px;
+  border-radius: 9px;
+  fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round;
+  background: linear-gradient(45deg, #F58529, #DD2A7B 50%, #8134AF);
+}
+.ig-handle { color: var(--hl); font-weight: 700; }
+.ig-inline { color: var(--hl); font-weight: 700; }
+
 /* -----------------------------------------------------------------------------
    Chat panel
    -------------------------------------------------------------------------- */
