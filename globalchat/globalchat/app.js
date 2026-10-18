@@ -44,6 +44,21 @@ const BOT_NAME = 'GlobalChat Bot';
 const BOT_MAX_PER_TAB = 3;
 const BOT_DELAY_MS = 1100;
 const JOIN_NOTE_AFTER_MS = 5000;    // ignore presence flicker right after joining
+// Bot characters (schema.sql section 12): scripted, always labelled, and
+// their lines live in the database. The page only needs how to show them.
+const BOTS = {
+  luna:   { name: 'Luna',           handle: 'Luna',   emoji: '🎧', about: 'music' },
+  arjun:  { name: 'Chef Arjun',     handle: 'Arjun',  emoji: '🍛', about: 'food' },
+  byte:   { name: 'Professor Byte', handle: 'Byte',   emoji: '🤓', about: 'science and tech' },
+  kiko:   { name: 'Kiko',           handle: 'Kiko',   emoji: '🎮', about: 'games' },
+  sakura: { name: 'Sakura',         handle: 'Sakura', emoji: '🌸', about: 'travel and languages' },
+  leo:    { name: 'Coach Leo',      handle: 'Leo',    emoji: '⚽', about: 'sports' },
+  nova:   { name: 'Nova',           handle: 'Nova',   emoji: '🌌', about: 'space' },
+  mia:    { name: 'Mia',            handle: 'Mia',    emoji: '🎬', about: 'movies' },
+  zen:    { name: 'Zen',            handle: 'Zen',    emoji: '🧘', about: 'calm and wellbeing' },
+  pixel:  { name: 'Pixel',          handle: 'Pixel',  emoji: '😂', about: 'jokes' },
+};
+const BOT_HELLO_EVERY_MS = 4 * 60_000;   // tell the bots someone is around
 
 const STARTERS = ['Hello from somewhere 👋', 'What time is it where you are?', 'What are you listening to right now?'];
 
@@ -56,6 +71,7 @@ const RICH_TOKEN = /(https?:\/\/[^\s<>"']+)|@([A-Za-z]{2,20}_[0-9]{4})\b|`([^`\n
 // Columns by database version, newest first. The page detects which one the
 // database has and switches off what it can't support (see setTier()).
 const TIER_COLUMNS = {
+  5: 'id, username, content, created_at, expires_at, kind, reply_to, image_path, poll_options, is_bot, command, sticker, country, edited_at, gender, bot_id',
   4: 'id, username, content, created_at, expires_at, kind, reply_to, image_path, poll_options, is_bot, command, sticker, country, edited_at, gender',
   3: 'id, username, content, created_at, expires_at, kind, reply_to, image_path, poll_options, is_bot, command, sticker, country, edited_at',
   2: 'id, username, content, created_at, expires_at, kind, reply_to, image_path, poll_options',
@@ -294,7 +310,7 @@ const state = {
     ?? { theme: 'dark', accent: 'violet', density: 'comfortable', sound: false, notify: false, soundAll: false, country: '', muted: [] },
   audio: null,
   legacy: false,                 // database not yet upgraded: hide new features
-  tier: 4,                       // database version detected (4 = everything)
+  tier: 5,                       // database version detected (5 = everything)
   myNames: new Map(),            // names this tab used -> ms they stopped being ours (null = current)
   roomState: null,               // pin, slow mode, question of the day, stats
   editing: null,                 // id of the message being edited
@@ -702,7 +718,7 @@ async function loadHistory({ backfill = false } = {}) {
   upsertMessages(batch, { initial });
   updateFeedState();
   loadExtras([...state.messages.keys()]);
-  if (!backfill) { loadRoomState(); maybeAskGender(); }
+  if (!backfill) { loadRoomState(); maybeAskGender(); botHello(true); }
 }
 
 const columns = () => TIER_COLUMNS[state.tier];
@@ -713,19 +729,20 @@ function isMissingColumn(error) {
 
 // The page is newer than the database: keep what works and hide the rest
 // until schema.sql is re-run. Tier 1 = original chat only, 2 = replies,
-// photos, polls, reactions, delete; 3 = community features; 4 = everything
-// (adds gender labels).
+// photos, polls, reactions, delete; 3 = community features; 4 = gender
+// labels; 5 = everything (adds the bot characters).
 function setTier(tier) {
   state.tier = tier;
   state.legacy = tier === 1;
   document.documentElement.dataset.features = { 1: 'legacy', 2: 'v2', 3: 'v3' }[tier] ?? '';
-  document.getElementById('setup-notice').hidden = tier === 4;
+  document.getElementById('setup-notice').hidden = tier === 5;
   document.getElementById('setup-notice-title').textContent = {
     1: 'Photos, polls, replies and reactions are switched off',
     2: 'Stickers, voice notes, editing, flags, trivia and room stats are switched off',
-    3: 'Gender labels are switched off',
+    3: 'Gender labels and the bot characters are switched off',
+    4: 'The bot characters are switched off',
   }[tier] ?? '';
-  console.warn(`[GlobalChat] Database features: tier ${tier} of 4. Re-run schema.sql to enable everything.`);
+  console.warn(`[GlobalChat] Database features: tier ${tier} of 5. Re-run schema.sql to enable everything.`);
   renderIdentityFlag();
   renderIdentityGender();
   renderCountries();
@@ -756,6 +773,7 @@ function isValidMessage(m) {
   m.kind ??= 'text';
   if (typeof m.reply_to !== 'string') m.reply_to = null;
   m.is_bot = m.is_bot === true;
+  m.bot_id = m.is_bot && Object.hasOwn(BOTS, m.bot_id ?? '') ? m.bot_id : null;
   if (typeof m.country !== 'string' || !/^[A-Z]{2}$/.test(m.country)) m.country = null;
   if (!Object.hasOwn(GENDERS, m.gender ?? '')) m.gender = null;
   if (!['roll', 'flip', '8ball'].includes(m.command)) m.command = null;
@@ -807,7 +825,9 @@ function upsertMessages(list, { initial }) {
   if (state.filter) applyFilter();
 }
 
-const displayName = (m) => (m.is_bot ? BOT_NAME : m.username);
+const botOf = (m) => (m?.is_bot && Object.hasOwn(BOTS, m.bot_id ?? '') ? BOTS[m.bot_id] : null);
+const displayName = (m) => (m.is_bot ? (botOf(m)?.name ?? BOT_NAME) : m.username);
+const botsOn = () => state.tier >= 5 && state.roomState?.bots_enabled === true;
 
 function buildNode(m) {
   const node = el.template.content.firstElementChild.cloneNode(true);
@@ -818,7 +838,14 @@ function buildNode(m) {
   const avatar = node.querySelector('.avatar');
   const name = node.querySelector('.msg-name');
   name.textContent = displayName(m);
-  if (m.is_bot) {
+  const bot = botOf(m);
+  if (bot) {
+    avatar.textContent = bot.emoji;
+    avatar.classList.add('avatar-bot');
+    node.classList.add('is-server-bot');
+    name.title = `${bot.name} is a scripted bot (${bot.about}). Click to mention`;
+    name.addEventListener('click', () => insertMention(bot.handle));
+  } else if (m.is_bot) {
     avatar.textContent = '🤖';
     avatar.classList.add('avatar-bot');
     node.classList.add('is-server-bot');
@@ -841,7 +868,8 @@ function buildNode(m) {
   if (m.is_bot || m.command) {
     badge.hidden = false;
     badge.textContent = m.is_bot ? 'bot' : `/${m.command}`;
-    badge.title = m.is_bot ? 'Automatic message' : 'Result picked by the server, so it can’t be faked';
+    badge.title = bot ? 'Scripted bot: automatic, pre-written messages, not a person'
+      : m.is_bot ? 'Automatic message' : 'Result picked by the server, so it can’t be faked';
   }
   node.classList.toggle('is-command', Boolean(m.command));
   renderRichText(node.querySelector('.msg-text'), m.content);  // safe: text nodes only
@@ -938,6 +966,7 @@ function regroup(node) {
   const before = prev ? state.messages.get(prev.dataset.id)?.data : null;
   const continued = Boolean(cur && before
     && before.username === cur.username
+    && before.bot_id === cur.bot_id          // bot characters share one server name
     && createdMs(cur) - createdMs(before) < GROUP_WINDOW_MS);
   node.classList.toggle('is-continued', continued);
 }
@@ -992,6 +1021,7 @@ function startExpirySweep() {
     }
   };
   setInterval(sweep, EXPIRY_SWEEP_MS);
+  setInterval(() => botHello(false), BOT_HELLO_EVERY_MS);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
     clearUnread();
@@ -1616,6 +1646,25 @@ function renderPeople() {
       li.className = 'person-more';
       li.textContent = `+${extra.toLocaleString()} more`;
       list.append(li);
+    }
+    if (botsOn()) {
+      for (const bot of Object.values(BOTS)) {
+        const li = document.createElement('li');
+        li.className = 'person is-bot';
+        li.title = `Scripted bot (${bot.about}). Write @${bot.handle} to talk to it`;
+        const avatar = document.createElement('span');
+        avatar.className = 'avatar avatar-bot';
+        avatar.setAttribute('aria-hidden', 'true');
+        avatar.textContent = bot.emoji;
+        const name = document.createElement('span');
+        name.className = 'person-name';
+        name.textContent = bot.name;
+        const tag = document.createElement('span');
+        tag.className = 'person-tag';
+        tag.textContent = 'bot';
+        li.append(avatar, name, tag);
+        list.append(li);
+      }
     }
   }
 }
@@ -2285,6 +2334,7 @@ function botLines(name) {
 }
 
 function maybeBotReply() {
+  if (botsOn()) return;   // the bot characters welcome people instead
   if (state.botRepliedWhileAlone || state.botReplies >= BOT_MAX_PER_TAB || !isAlone()) return;
   state.botRepliedWhileAlone = true;
   state.botReplies++;
@@ -2483,7 +2533,7 @@ function applyRoomState(rs) {
   const pin = rs.pinned && typeof rs.pinned.id === 'string' ? rs.pinned : null;
   el.pinBar.hidden = !pin;
   if (pin) {
-    el.pinName.textContent = `${pin.is_bot ? BOT_NAME : pin.username}:`;
+    el.pinName.textContent = `${displayName({ ...pin, is_bot: pin.is_bot === true })}:`;
     el.pinContent.textContent = previewText({ kind: pin.kind ?? 'text', content: String(pin.content ?? '') });
     el.pinBar.onclick = () => {
       if (state.messages.has(pin.id)) scrollToMessage(pin.id);
@@ -2500,6 +2550,15 @@ function applyRoomState(rs) {
   showCards('question', Boolean(q));
 
   renderStats(rs.stats);
+  renderPeople();
+}
+
+// Lets the bot characters know someone has the page open (they only chat
+// while people are around); on arrival, a quiet room gets a hello.
+function botHello(join = false) {
+  if (state.tier < 5 || !state.sb || !state.session || document.visibilityState !== 'visible') return;
+  state.sb.rpc('gc_bot_hello', { p_join: join })
+    .then(({ error }) => { if (error) console.warn('[GlobalChat] bot hello', error); }, () => {});
 }
 
 function renderStats(stats) {

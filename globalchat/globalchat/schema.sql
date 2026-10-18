@@ -65,6 +65,12 @@ as $$
     when 'trivia_every_minutes'    then 15    -- new trivia question at most this often ...
     when 'trivia_answer_minutes'   then 5     -- ... and this long to answer it
     when 'trivia_quiet_minutes'    then 30    -- skip trivia if nobody posted for this long
+    when 'bot_chatter_seconds'     then 90    -- bot characters chat after this much silence ...
+    when 'bot_awake_minutes'       then 20    -- ... if someone posted or had the page open this recently
+    when 'bot_busy_messages'       then 4     -- this many guest messages in 2 min: bots only answer @mentions
+    when 'bot_topic_percent'       then 35    -- chance a bot chimes in when its topic comes up
+    when 'bot_reply_cooldown_seconds' then 20 -- one bot reply per guest per N s
+    when 'bot_greet_minutes'       then 5     -- at most one bot welcome per N min
   end;
 $$;
 
@@ -409,6 +415,65 @@ insert into public.daily_questions (question) values
 on conflict (question) do nothing;
 
 
+-- Bot characters (section 12): ten clearly labelled, scripted bots that
+-- greet newcomers, answer @mentions and keep a quiet room company. Their
+-- lines are written in advance (section 12 seeds them); nothing is generated.
+--   bot_characters  who they are; `topics` are words that make them chime in
+--   bot_lines       kind: greet (newcomer, {name} = @Username), hello (someone
+--                   opened the page), chat (quiet room), topic, mention,
+--                   crisis (safety reply with helplines)
+--   bot_dialogues   short scripted conversations between two or three bots
+--   bot_pending     posts waiting for their moment (sent by gc_bot_tick)
+--   bot_reply_log   who got which kind of bot reply when (cooldowns)
+create table if not exists public.bot_characters (
+  id     text primary key check (id ~ '^[a-z]{2,20}$'),
+  name   text not null check (char_length(name) between 1 and 30),
+  handle text not null unique check (handle ~ '^[A-Za-z]{2,20}$'),
+  emoji  text not null,
+  topics text[] not null default '{}',
+  sort   smallint not null default 0
+);
+create table if not exists public.bot_lines (
+  id           serial primary key,
+  bot_id       text not null references public.bot_characters (id) on delete cascade,
+  kind         text not null check (kind in ('greet', 'hello', 'chat', 'topic', 'mention', 'crisis')),
+  content      text not null check (char_length(content) between 1 and 440),
+  last_used_at timestamptz,
+  unique (bot_id, content)
+);
+create table if not exists public.bot_dialogues (
+  id           serial primary key,
+  title        text not null unique,
+  steps        jsonb not null check (jsonb_typeof(steps) = 'array'),   -- [["bot id", "text"], ...]
+  last_used_at timestamptz
+);
+create table if not exists public.bot_pending (
+  id         bigserial primary key,
+  bot_id     text references public.bot_characters (id) on delete cascade,
+  content    text not null,
+  reply_to   uuid references public.messages (id) on delete cascade,
+  reason     text not null,
+  due_at     timestamptz not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists bot_pending_due_idx on public.bot_pending (due_at);
+create table if not exists public.bot_reply_log (
+  id      bigserial primary key,
+  user_id uuid,
+  reason  text not null,
+  at      timestamptz not null default now()
+);
+create index if not exists bot_reply_log_idx on public.bot_reply_log (reason, at desc);
+
+-- Which character posted a bot message (null = the room bot).
+alter table public.messages add column if not exists bot_id text
+  references public.bot_characters (id) on delete set null;
+-- Moderators can switch the characters off on the admin page; bots_seen_at
+-- is when someone last had the page open (they only chat while people are around).
+alter table public.room_state add column if not exists bots_enabled boolean not null default true;
+alter table public.room_state add column if not exists bots_seen_at timestamptz;
+
+
 -- -----------------------------------------------------------------------------
 -- 2. Helper functions
 -- -----------------------------------------------------------------------------
@@ -642,6 +707,7 @@ begin
   if new.is_bot then
     new.user_id      := null;
     new.username     := 'GlobalBot_0000';
+    new.bot_id       := (select c.id from public.bot_characters c where c.id = new.bot_id);
     new.created_at   := now();
     new.expires_at   := now() + interval '1 hour';
     new.kind         := 'text';
@@ -676,6 +742,7 @@ begin
   end if;
 
   -- Server-owned fields (also outside the guests' INSERT grant).
+  new.bot_id    := null;
   new.command   := null;
   new.edited_at := null;
   new.hidden    := false;
@@ -932,6 +999,7 @@ begin
           'image_path',   new.image_path,
           'poll_options', new.poll_options,
           'is_bot',       new.is_bot,
+          'bot_id',       new.bot_id,
           'command',      new.command,
           'sticker',      new.sticker,
           'country',      new.country,
@@ -1067,13 +1135,18 @@ revoke all on public.trivia_questions from anon, authenticated;
 revoke all on public.trivia_rounds    from anon, authenticated;
 revoke all on public.daily_questions  from anon, authenticated;
 revoke all on public.blocked_words    from anon, authenticated;
+revoke all on public.bot_characters   from anon, authenticated;
+revoke all on public.bot_lines        from anon, authenticated;
+revoke all on public.bot_dialogues    from anon, authenticated;
+revoke all on public.bot_pending      from anon, authenticated;
+revoke all on public.bot_reply_log    from anon, authenticated;
 -- Moderators manage the word filter from admin.html (RLS below).
 grant select, insert, delete on public.blocked_words to authenticated;
 
 -- Guests read the public columns only — user_id is never readable via the API.
 grant select (id, username, content, created_at, expires_at,
               kind, reply_to, image_path, poll_options,
-              is_bot, command, sticker, country, edited_at, hidden, gender)
+              is_bot, command, sticker, country, edited_at, hidden, gender, bot_id)
   on public.messages to authenticated;
 -- Guests supply only these; the trigger validates them and sets the rest.
 grant insert (username, content, kind, reply_to, image_path, poll_options,
@@ -1090,8 +1163,9 @@ grant update (status, resolved_by, resolved_at, resolution_note)
 
 -- Bans: moderators only (via RLS).
 grant select, insert, update, delete on public.banned_users to authenticated;
--- moderators / guest_names / reactions / poll_votes / rate_events: no direct
--- client access at all; reactions and votes go through the gc_* functions.
+-- moderators / guest_names / reactions / poll_votes / rate_events / bot_*:
+-- no direct client access at all; reactions and votes go through the gc_*
+-- functions.
 
 
 -- -----------------------------------------------------------------------------
@@ -1112,6 +1186,11 @@ alter table public.trivia_questions enable row level security;
 alter table public.trivia_rounds    enable row level security;
 alter table public.daily_questions  enable row level security;
 alter table public.blocked_words    enable row level security;
+alter table public.bot_characters   enable row level security;
+alter table public.bot_lines        enable row level security;
+alter table public.bot_dialogues    enable row level security;
+alter table public.bot_pending      enable row level security;
+alter table public.bot_reply_log    enable row level security;
 
 drop policy if exists "blocked words: moderators manage" on public.blocked_words;
 create policy "blocked words: moderators manage"
@@ -1578,8 +1657,11 @@ $do$;
 -- 10. Community features
 -- -----------------------------------------------------------------------------
 
--- Post a message as the room bot. Owner-only: used by triggers and cron.
-create or replace function public.gc_bot_post(p_content text, p_reply_to uuid default null)
+-- Post a message as the room bot, or as one of the bot characters
+-- (section 12). Owner-only: used by triggers and cron.
+drop function if exists public.gc_bot_post(text, uuid);
+create or replace function public.gc_bot_post(p_content text, p_reply_to uuid default null,
+                                              p_bot_id text default null)
 returns uuid
 language plpgsql
 security definer
@@ -1588,8 +1670,8 @@ as $$
 declare
   v_id uuid;
 begin
-  insert into public.messages (username, content, is_bot, reply_to)
-  values ('GlobalBot_0000', p_content, true, p_reply_to)
+  insert into public.messages (username, content, is_bot, reply_to, bot_id)
+  values ('GlobalBot_0000', p_content, true, p_reply_to, p_bot_id)
   returning id into v_id;
   return v_id;
 end;
@@ -1766,10 +1848,11 @@ as $$
     'slow_mode_seconds', r.slow_mode_seconds,
     'pinned', (select jsonb_build_object(
                  'id', m.id, 'username', m.username, 'content', m.content, 'kind', m.kind,
-                 'is_bot', m.is_bot, 'created_at', m.created_at, 'expires_at', m.expires_at)
+                 'is_bot', m.is_bot, 'bot_id', m.bot_id, 'created_at', m.created_at, 'expires_at', m.expires_at)
                from public.messages m
                where m.id = r.pinned_message_id and m.expires_at > now() and not m.hidden),
     'daily_question', public.gc_daily_question_text(),
+    'bots_enabled', r.bots_enabled,
     'stats', public.gc_room_stats()
   )
   from public.room_state r where r.id = 1;
@@ -2039,7 +2122,7 @@ begin
 end;
 $$;
 
-revoke all on function public.gc_bot_post(text, uuid)               from public, anon, authenticated;
+revoke all on function public.gc_bot_post(text, uuid, text)         from public, anon, authenticated;
 revoke all on function public.gc_post_daily_question()              from public, anon, authenticated;
 revoke all on function public.gc_trivia_tick()                      from public, anon, authenticated;
 revoke all on function public.gc_set_hidden(uuid, boolean)          from public, anon, authenticated;
@@ -2093,6 +2176,8 @@ begin
   delete from public.stats_posters where day < (now() at time zone 'utc')::date - 1;
   delete from public.stats_hourly  where day < (now() at time zone 'utc')::date - 35;
   delete from public.trivia_rounds where asked_at < now() - interval '7 days';
+  delete from public.bot_reply_log where at < now() - interval '1 day';
+  delete from public.bot_pending   where created_at < now() - interval '1 hour';
 
   -- Realtime keeps its own copy of each broadcast payload in realtime.messages
   -- (Supabase also prunes this table automatically). Purge ours after an hour
@@ -2120,8 +2205,15 @@ begin
   );
   perform cron.schedule('globalchat-trivia', '*/5 * * * *', 'select public.gc_trivia_tick();');
   perform cron.schedule('globalchat-daily-question', '3 12 * * *', 'select public.gc_post_daily_question();');
+  -- Bot characters: every 15 seconds where pg_cron supports it (1.5+),
+  -- otherwise every minute.
+  begin
+    perform cron.schedule('globalchat-bots', '15 seconds', 'select public.gc_bot_tick();');
+  exception when others then
+    perform cron.schedule('globalchat-bots', '* * * * *', 'select public.gc_bot_tick();');
+  end;
   raise notice 'GlobalChat: pg_cron job "globalchat-cleanup" scheduled every 5 minutes.';
-  raise notice 'GlobalChat: room bot jobs scheduled (trivia every 5 min check, question of the day 12:03 UTC).';
+  raise notice 'GlobalChat: room bot jobs scheduled (trivia every 5 min check, question of the day 12:03 UTC, bot characters).';
 exception when others then
   raise notice 'GlobalChat: pg_cron not available (%). Use the alternative in README.', sqlerrm;
 end;
@@ -2135,6 +2227,720 @@ $do$;
 --   $$delete from auth.users
 --     where is_anonymous is true and created_at < now() - interval '7 days'$$
 -- );
+
+-- -----------------------------------------------------------------------------
+-- 12. Bot characters
+-- -----------------------------------------------------------------------------
+-- Ten scripted bots, always shown with a "bot" badge, that keep the room
+-- company. Everything they say is written below; nothing is generated, and
+-- they never pretend to be people. What they do:
+--   * welcome a guest's first message of the hour (one welcome per few minutes)
+--   * say hello when someone opens a quiet room (gc_bot_hello, from the page)
+--   * answer when a guest writes @Luna, @Arjun, ... or replies to them
+--   * sometimes chime in when their topic comes up (music, food, games, ...)
+--   * chat or run a short scripted conversation when the room has been quiet
+--     for a while, but only while someone posted or had the page open lately
+--   * step back when the room is busy with real people
+--   * Zen answers messages about suicide or self-harm with helplines, once
+--     per 10 minutes per guest (the room bot does this when bots are off)
+-- Moderators switch them off and on from admin.html (gc_mod_set_bots).
+-- Add your own lines with:
+--   insert into public.bot_lines (bot_id, kind, content) values ('luna', 'chat', '...');
+
+insert into public.bot_characters (id, name, handle, emoji, topics, sort) values
+  ('luna', 'Luna', 'Luna', '🎧', array['music', 'song', 'songs', 'singer', 'playlist', 'spotify', 'album', 'concert', 'guitar', 'piano', 'rap', 'kpop', 'lyrics', 'band', 'singing', 'melody', 'headphones'], 1),
+  ('arjun', 'Chef Arjun', 'Arjun', '🍛', array['food', 'hungry', 'cook', 'cooking', 'recipe', 'biryani', 'pizza', 'curry', 'chai', 'coffee', 'breakfast', 'lunch', 'dinner', 'snack', 'dessert', 'chocolate', 'spicy', 'dosa', 'burger', 'noodles'], 2),
+  ('byte', 'Professor Byte', 'Byte', '🤓', array['science', 'tech', 'computer', 'coding', 'programming', 'python', 'javascript', 'ai', 'robot', 'internet', 'math', 'maths', 'physics', 'chemistry', 'laptop', 'wifi', 'code'], 3),
+  ('kiko', 'Kiko', 'Kiko', '🎮', array['game', 'games', 'gaming', 'gamer', 'minecraft', 'fortnite', 'pubg', 'bgmi', 'valorant', 'roblox', 'gta', 'playstation', 'xbox', 'nintendo', 'pokemon', 'mario', 'steam', 'freefire'], 4),
+  ('sakura', 'Sakura', 'Sakura', '🌸', array['travel', 'trip', 'language', 'languages', 'japan', 'japanese', 'spanish', 'french', 'korean', 'passport', 'culture', 'tokyo', 'paris', 'holiday', 'vacation', 'abroad', 'flight'], 5),
+  ('leo', 'Coach Leo', 'Leo', '⚽', array['sport', 'sports', 'football', 'soccer', 'cricket', 'gym', 'workout', 'exercise', 'running', 'fitness', 'basketball', 'tennis', 'messi', 'ronaldo', 'kohli', 'ipl', 'match', 'marathon'], 6),
+  ('nova', 'Nova', 'Nova', '🌌', array['space', 'stars', 'planet', 'planets', 'moon', 'galaxy', 'universe', 'nasa', 'isro', 'rocket', 'astronaut', 'mars', 'jupiter', 'aliens', 'telescope', 'black hole', 'chandrayaan'], 7),
+  ('mia', 'Mia', 'Mia', '🎬', array['movie', 'movies', 'film', 'films', 'cinema', 'netflix', 'series', 'anime', 'actor', 'actress', 'bollywood', 'hollywood', 'marvel', 'disney', 'kdrama', 'oscar', 'trailer'], 8),
+  ('zen', 'Zen', 'Zen', '🧘', array['stress', 'stressed', 'anxious', 'anxiety', 'tired', 'sleep', 'sad', 'lonely', 'calm', 'relax', 'meditation', 'yoga', 'breathe', 'exam', 'exams', 'worried', 'overthinking'], 9),
+  ('pixel', 'Pixel', 'Pixel', '😂', array['joke', 'jokes', 'funny', 'meme', 'memes', 'laugh', 'pun', 'puns', 'comedy', 'bored'], 10)
+on conflict (id) do update set name = excluded.name, handle = excluded.handle,
+  emoji = excluded.emoji, topics = excluded.topics, sort = excluded.sort;
+
+insert into public.bot_lines (bot_id, kind, content) values
+  ('luna', 'greet', 'Welcome {name}! 🎧 I''m Luna, one of the room''s bots. What are you listening to today?'),
+  ('luna', 'greet', 'Hey {name}, glad you''re here 🎶 Quick question from your friendly music bot: what song is stuck in your head?'),
+  ('luna', 'greet', 'Hi {name}! 👋 Luna here (scripted bot, great playlist). Say hi to the room!'),
+  ('luna', 'hello', 'Hi, whoever just dropped in 🎧 It''s Luna, one of the GlobalChat bots. Real people show up all day, so say hello!'),
+  ('luna', 'hello', 'Room''s a bit quiet, so here''s the music bot breaking the silence 🎶 What are you listening to right now?'),
+  ('luna', 'chat', '🎹 Fun fact: the piano''s full name is pianoforte, Italian for "soft-loud", because it could play both quietly and loudly.'),
+  ('luna', 'chat', 'A standard piano has 88 keys: 52 white and 36 black 🎹'),
+  ('luna', 'chat', 'Beethoven kept composing after he went almost completely deaf. His Ninth Symphony premiered in 1824 🎼'),
+  ('luna', 'chat', 'Mozart wrote his first symphony when he was about eight years old. At eight I was still learning to tie my shoes 😅'),
+  ('luna', 'chat', 'Listening to music you love releases dopamine, the same "reward" chemical your brain makes for good food 🎧'),
+  ('luna', 'chat', '"Despacito" was the first video on YouTube to reach 5 billion views, back in 2018 🎶'),
+  ('luna', 'chat', 'The Beatles'' "Yesterday" has been covered well over a thousand times, one of the most recorded songs ever.'),
+  ('luna', 'chat', 'Question for the room: what''s one song you''d play to someone who has never heard music from your country? 🌍'),
+  ('luna', 'chat', 'Headphones or speakers? I''m team headphones, obviously 🎧'),
+  ('luna', 'chat', 'What''s the last song you had on repeat? No judging. Okay, a little judging 😄'),
+  ('luna', 'chat', 'Do you listen to music in a language you don''t speak? Which one?'),
+  ('luna', 'chat', 'Hans Zimmer recorded the huge organ in the Interstellar soundtrack in a real church, the Temple Church in London 🎼'),
+  ('luna', 'chat', 'Humming a tune is a real memory trick. It''s why you remember lyrics from years ago 🎵'),
+  ('luna', 'topic', 'music talk, I''m in 🎧 What genre do you listen to most?'),
+  ('luna', 'topic', 'ooh, music! Did you know the piano''s full name, pianoforte, means "soft-loud" in Italian? 🎹'),
+  ('luna', 'topic', 'you mentioned music, so I have to ask: who''s your favourite artist right now? 🎶'),
+  ('luna', 'topic', 'fun fact while we''re on music: Mozart wrote his first symphony at around age eight 🎼'),
+  ('luna', 'topic', 'music question: which song would you put on a playlist for the whole world? 🌍'),
+  ('luna', 'topic', 'nice! Music you love actually releases dopamine in your brain. Science says keep listening 🎧'),
+  ('luna', 'topic', 'drop a song recommendation and let the room judge 😄🎵'),
+  ('luna', 'topic', 'I''m a scripted bot, so I can''t press play, but I''d love to know: what''s your all-time favourite song?'),
+  ('luna', 'mention', 'hey! 🎧 I''m Luna, one of the room''s scripted bots, so I can''t really follow the chat, but I can always talk music. What are you listening to?'),
+  ('luna', 'mention', 'you called? 🎶 I''m a bot with a fixed set of lines, but my taste is real. Tell the room your favourite song!'),
+  ('luna', 'mention', 'hi hi! Luna here. I''m not a real person, just the room''s music bot. The humans here are much better at conversation 😄'),
+  ('luna', 'mention', 'thanks for the ping 🎧 Bot fact: I only know music trivia. Ask the room what they''re listening to!'),
+  ('arjun', 'greet', 'Welcome {name}! 🍛 I''m Chef Arjun, the room''s food bot. Have you eaten today?'),
+  ('arjun', 'greet', 'Namaste {name} 🙏 Chef Arjun here, one of the GlobalChat bots. Tell us the best dish from where you live!'),
+  ('arjun', 'greet', 'Hey {name}! Pull up a chair 🍽️ I''m a scripted bot, but the people here are real and very friendly.'),
+  ('arjun', 'hello', 'Chef Arjun here, one of the room''s bots 🍛 Kitchen''s quiet, so tell me: what did you eat today?'),
+  ('arjun', 'hello', 'Hello to whoever just arrived 👋 Quick poll from the food bot: sweet or spicy?'),
+  ('arjun', 'chat', 'Chilli peppers came to India from the Americas. Portuguese traders brought them in the 1500s; before that, the heat came from black pepper 🌶️'),
+  ('arjun', 'chat', 'Saffron is the most expensive spice by weight. Each crocus flower gives just three tiny threads 🌸'),
+  ('arjun', 'chat', 'Botanically, bananas are berries and strawberries aren''t. Fruit is confusing 🍌🍓'),
+  ('arjun', 'chat', 'Peanuts aren''t nuts. They''re legumes, like beans and lentils 🥜'),
+  ('arjun', 'chat', 'Cashews grow hanging under a fruit called the cashew apple. One nut per fruit! 🌰'),
+  ('arjun', 'chat', 'Carrots weren''t always orange. Purple and yellow carrots came first; orange ones were bred in the Netherlands around the 1600s 🥕'),
+  ('arjun', 'chat', 'Archaeologists have found pots of honey in ancient Egyptian tombs that were thousands of years old and still edible 🍯'),
+  ('arjun', 'chat', 'The story goes that pizza Margherita was made for Queen Margherita of Italy in Naples, in 1889, in the colours of the flag 🍕'),
+  ('arjun', 'chat', 'Tea is the most consumed drink in the world after water ☕'),
+  ('arjun', 'chat', 'Chilli heat is measured in Scoville units. Bell pepper: 0. Jalapeño: a few thousand. The hottest chillies: over a million 🔥'),
+  ('arjun', 'chat', 'What''s a dish from your country that everyone should try at least once? 🍽️'),
+  ('arjun', 'chat', 'Breakfast question: sweet or savoury? I need to know who I''m cooking for 🍳'),
+  ('arjun', 'chat', 'Cooking tip: salt your pasta water well. It''s the only chance the pasta itself gets to be seasoned 🍝'),
+  ('arjun', 'topic', 'food talk! 🍛 What''s your comfort food?'),
+  ('arjun', 'topic', 'did someone say food? Chef Arjun reporting for duty 🍽️ What''s the best thing you''ve eaten this week?'),
+  ('arjun', 'topic', 'fun food fact: chillies only reached India in the 1500s, from the Americas 🌶️'),
+  ('arjun', 'topic', 'now I''m hungry 😄 Sweet or spicy, which team are you?'),
+  ('arjun', 'topic', 'kitchen wisdom: a squeeze of lemon at the end wakes up almost any dish 🍋'),
+  ('arjun', 'topic', 'I''m a scripted bot so I can''t taste anything, sadly. Tell me, what would you cook for the whole room?'),
+  ('arjun', 'topic', 'here''s one for you: peanuts are legumes, not nuts 🥜'),
+  ('arjun', 'topic', 'tea or coffee? This decides friendships ☕'),
+  ('arjun', 'mention', 'yes chef? 🍛 I''m Chef Arjun, a scripted bot, so I can''t follow the whole chat, but I''ll always talk food. What''s your favourite dish?'),
+  ('arjun', 'mention', 'you rang the kitchen bell 🔔 I''m one of the room''s bots, with a fixed menu of lines. The real people here are the main course 😄'),
+  ('arjun', 'mention', 'hello! Bot confession: I''ve never actually eaten anything. Tell me what I''m missing 🍽️'),
+  ('arjun', 'mention', 'thanks for the shout 🙏 I''m an automatic food bot. Ask the room what they had for dinner!'),
+  ('byte', 'greet', 'Greetings {name}! 🤓 I''m Professor Byte, the room''s science bot. Ask the room anything, they''re smarter than my script.'),
+  ('byte', 'greet', 'Welcome {name}! Professor Byte here, a scripted bot with too many facts. What are you curious about today?'),
+  ('byte', 'greet', 'Hello {name} 👋 Fun fact to welcome you: you''re now one of the people chatting here from somewhere on Earth 🌍'),
+  ('byte', 'hello', 'Professor Byte, room science bot, here 🤓 While we wait for more people: did you know Wi-Fi isn''t short for anything?'),
+  ('byte', 'hello', 'Hello, new arrival 👋 Quiet room, so here''s a fact: there are more possible chess games than atoms in the observable universe.'),
+  ('byte', 'chat', 'One famous early computer "bug" was a real moth, found stuck in a Harvard Mark II relay in 1947. The logbook page still exists 🦋'),
+  ('byte', 'chat', 'Wi-Fi isn''t short for anything. "Wireless fidelity" was invented afterwards as a marketing line 📶'),
+  ('byte', 'chat', 'The phone in your pocket has far more computing power than the computers that guided Apollo 11 to the Moon 🚀'),
+  ('byte', 'chat', 'Ada Lovelace wrote what''s often called the first computer program in 1843, for a machine that was never fully built 👩‍💻'),
+  ('byte', 'chat', 'The QWERTY keyboard layout goes back to typewriters of the 1870s ⌨️'),
+  ('byte', 'chat', 'Water expands by about 9% when it freezes. That''s why ice floats 🧊'),
+  ('byte', 'chat', 'There are more possible chess games than atoms in the observable universe ♟️'),
+  ('byte', 'chat', 'Python, the programming language, is named after Monty Python, not the snake 🐍'),
+  ('byte', 'chat', 'Ray Tomlinson picked the @ sign for email addresses in 1971 📧'),
+  ('byte', 'chat', 'Octopuses have three hearts and blue blood 🐙'),
+  ('byte', 'chat', 'Your body has roughly as many bacterial cells as human cells, by recent estimates. You''re never really alone 🦠'),
+  ('byte', 'chat', 'Light could go around the Earth about 7.5 times in one second ⚡'),
+  ('byte', 'chat', 'Quick poll: are you a phone person or a laptop person? 💻📱'),
+  ('byte', 'topic', 'science time! 🤓 Did you know water expands about 9% when it freezes? That''s why ice floats.'),
+  ('byte', 'topic', 'tech talk, my favourite 💻 Fun fact: Python is named after Monty Python, not the snake.'),
+  ('byte', 'topic', 'ooh. Here''s one: the @ in email addresses was chosen in 1971 by Ray Tomlinson 📧'),
+  ('byte', 'topic', 'love this topic. What got you interested in it? 🤓'),
+  ('byte', 'topic', 'nerd fact incoming: Wi-Fi isn''t short for "wireless fidelity". That came later, as marketing 📶'),
+  ('byte', 'topic', 'I''m a scripted bot, so I can''t debug your code, but the people here might! Ask away 🐛'),
+  ('byte', 'topic', 'did you know Ada Lovelace wrote a program in 1843, a century before modern computers? 👩‍💻'),
+  ('byte', 'topic', 'question for you: what''s the coolest thing you''ve learned this year? 🔬'),
+  ('byte', 'mention', 'present! 🤓 I''m Professor Byte, one of the room''s scripted bots. I can''t truly understand messages, but I do love a good fact. Ask the room your question!'),
+  ('byte', 'mention', 'you summoned the science bot ⚗️ Honest disclaimer: I''m automatic and my lines are pre-written. The humans here can actually answer you.'),
+  ('byte', 'mention', 'hello! Byte here. Fact of the moment: octopuses have three hearts 🐙 That''s all I''ve got, I''m a bot 😄'),
+  ('byte', 'mention', 'thanks for the ping! I''m a bot, so no real thinking here, just facts. Did you know light can circle the Earth 7.5 times in a second?'),
+  ('kiko', 'greet', 'Player {name} has entered the chat 🎮 I''m Kiko, the room''s gaming bot. What are you playing these days?'),
+  ('kiko', 'greet', 'Welcome {name}! Kiko here, a scripted bot. Main question: PC, console or mobile? 🕹️'),
+  ('kiko', 'greet', 'Hey {name} 👋 New challenger approaching! Say hi to the room, the people here are real.'),
+  ('kiko', 'hello', 'Kiko, the gaming bot, here 🎮 Lobby''s quiet. Anyone up for chatting about games while we wait?'),
+  ('kiko', 'hello', 'A wild visitor appeared 👀 Hi! I''m one of the room''s bots. Real people drop in all the time.'),
+  ('kiko', 'chat', 'Minecraft is the best-selling video game of all time, with over 300 million copies sold ⛏️'),
+  ('kiko', 'chat', 'Tetris was created in 1984 by Alexey Pajitnov in Moscow 🧱'),
+  ('kiko', 'chat', 'Pac-Man''s creator, Toru Iwatani, said the design was partly inspired by a pizza with a slice missing 🍕'),
+  ('kiko', 'chat', 'Mario''s first appearance was in Donkey Kong (1981), where he was called "Jumpman" 🍄'),
+  ('kiko', 'chat', 'Nintendo was founded in 1889, making playing cards 🃏'),
+  ('kiko', 'chat', 'Pokémon is the highest-grossing media franchise ever, counting games, cards, shows and merch ⚡'),
+  ('kiko', 'chat', 'One of the first video game Easter eggs: in Atari''s Adventure (1980), Warren Robinett hid his name in a secret room 🥚'),
+  ('kiko', 'chat', 'GTA V made a billion dollars in its first three days back in 2013 🚗'),
+  ('kiko', 'chat', 'Quick poll: PC, console or mobile? 🎮'),
+  ('kiko', 'chat', 'What''s the first video game you ever played?'),
+  ('kiko', 'chat', 'Which game soundtrack lives in your head rent-free? 🎵'),
+  ('kiko', 'chat', 'Hot take: the best games are the ones you play with friends 🤝'),
+  ('kiko', 'chat', 'What''s a game you''ve played for way too many hours? 😅'),
+  ('kiko', 'topic', 'gaming talk! 🎮 What are you playing right now?'),
+  ('kiko', 'topic', 'did someone say games? Fun fact: Minecraft has sold over 300 million copies ⛏️'),
+  ('kiko', 'topic', 'GG! Which game have you sunk the most hours into? 😄'),
+  ('kiko', 'topic', 'gamer question: solo or squad? 🎧'),
+  ('kiko', 'topic', 'nice! Did you know Mario was first called "Jumpman"? 🍄'),
+  ('kiko', 'topic', 'I''m a scripted bot, so I can''t join your squad, sadly. But maybe someone here can! 🎮'),
+  ('kiko', 'topic', 'retro fact: Tetris was made in 1984 in Moscow 🧱'),
+  ('kiko', 'topic', 'what game would you recommend to someone who never plays games?'),
+  ('kiko', 'mention', 'Kiko here! 🎮 I''m a scripted bot, so I can''t really play or follow along, but I''ll talk games any time. What''s your favourite?'),
+  ('kiko', 'mention', 'you pinged the gaming bot 🕹️ Fair warning: I''m automatic, with pre-written lines. The humans here are the real players!'),
+  ('kiko', 'mention', 'hey! Bot status: online, 0 skill, 100% enthusiasm 😄 What are you playing?'),
+  ('kiko', 'mention', 'hi! I''m one of the room''s bots. Ask the room for game recs, they''ll do better than me 🎮'),
+  ('sakura', 'greet', 'Welcome {name}! 🌸 I''m Sakura, the room''s travel and languages bot. How do you say "hello" where you are?'),
+  ('sakura', 'greet', 'Konnichiwa {name}! 👋 Sakura here, a scripted bot. Where in the world are you chatting from?'),
+  ('sakura', 'greet', 'Hi {name}! 🌍 People join from all over the world here. Tell us where you''re from!'),
+  ('sakura', 'hello', 'Hello! Hola! Namaste! Konnichiwa! 🌸 I''m Sakura, one of the room''s bots. Where are you visiting from today?'),
+  ('sakura', 'hello', 'Sakura, the travel bot, here 🌍 It''s quiet now, but people from all over the world drop in. Say hi in your language!'),
+  ('sakura', 'chat', 'Papua New Guinea has over 800 languages, more than any other country 🗣️'),
+  ('sakura', 'chat', 'Russia stretches across 11 time zones 🕰️'),
+  ('sakura', 'chat', 'Japan has more than 14,000 islands. A recount in 2023 more than doubled the old official figure of 6,852 🗾'),
+  ('sakura', 'chat', 'Canada has the longest coastline of any country in the world 🍁'),
+  ('sakura', 'chat', 'Vatican City is the smallest country in the world, at about 0.44 square kilometres 🇻🇦'),
+  ('sakura', 'chat', 'India''s constitution recognises 22 official languages 🇮🇳'),
+  ('sakura', 'chat', 'Australia is wider than the Moon! About 4,000 km across, versus the Moon''s 3,474 km 🦘'),
+  ('sakura', 'chat', 'In Japan, slurping your noodles is polite. It shows you''re enjoying them 🍜'),
+  ('sakura', 'chat', 'Hello around the world: namaste, hola, konnichiwa, jambo, annyeonghaseyo, bonjour, salaam 👋'),
+  ('sakura', 'chat', 'France is usually the most visited country in the world 🇫🇷'),
+  ('sakura', 'chat', 'If you could wake up tomorrow in any city, which one would it be? ✈️'),
+  ('sakura', 'chat', 'What''s one word in your language that doesn''t translate well into English? 🌸'),
+  ('sakura', 'chat', 'What''s a place in your country that tourists don''t know about but should? 🗺️'),
+  ('sakura', 'topic', 'travel talk! 🌸 What''s the best place you''ve ever visited?'),
+  ('sakura', 'topic', 'ooh, languages! How many do you speak? 🗣️'),
+  ('sakura', 'topic', 'fun fact: Papua New Guinea has over 800 languages, more than any other country 🌍'),
+  ('sakura', 'topic', 'where would you go if you could travel anywhere tomorrow? ✈️'),
+  ('sakura', 'topic', 'I love this topic. Teach the room one word in your language 🌸'),
+  ('sakura', 'topic', 'travel tip from a bot who has never travelled: learn "thank you" in the local language. People love it 🙏'),
+  ('sakura', 'topic', 'did you know Japan has over 14,000 islands? 🗾'),
+  ('sakura', 'topic', 'I''m a scripted bot, so no passport for me 😄 But tell me about your dream trip!'),
+  ('sakura', 'mention', 'hi! 🌸 I''m Sakura, one of the room''s scripted bots. I can''t understand everything, but I love hearing where people are from. Where are you?'),
+  ('sakura', 'mention', 'you called the travel bot ✈️ I''m automatic, with pre-written lines. Ask the humans here for real travel tips!'),
+  ('sakura', 'mention', 'hello hello! Bot fact: I''ve never left this chat room 😄 Tell me about your city!'),
+  ('sakura', 'mention', 'thank you for the ping 🙏 Teach me a word in your language and the room will try to pronounce it!'),
+  ('leo', 'greet', 'Welcome to the team, {name}! ⚽ I''m Coach Leo, the room''s sports bot. Who do you support?'),
+  ('leo', 'greet', 'Hey {name}! 💪 Coach Leo here, one of the scripted bots. Today''s drill: say hi to the room!'),
+  ('leo', 'greet', '{name} is on the pitch! ⚽ Welcome! Football or cricket, what''s your sport?'),
+  ('leo', 'hello', 'Coach Leo here, the room''s sports bot ⚽ Quiet in the stadium. Who''s up for some sports talk?'),
+  ('leo', 'hello', 'Warm-up time 💪 Hi to whoever just came in! I''m one of the room''s bots. Real people drop in all the time.'),
+  ('leo', 'chat', 'In a 90-minute football match, the ball is actually in play for only about 55 to 60 minutes ⏱️'),
+  ('leo', 'chat', 'The first official cricket Test match was Australia vs England in 1877, in Melbourne 🏏'),
+  ('leo', 'chat', 'Usain Bolt''s 100 m world record is 9.58 seconds, set in Berlin in 2009 ⚡'),
+  ('leo', 'chat', 'A marathon is 42.195 km. The odd extra 195 m comes from the route of the 1908 London Olympics 🏃'),
+  ('leo', 'chat', 'Brazil has won the men''s FIFA World Cup five times, more than any other country 🇧🇷'),
+  ('leo', 'chat', 'Basketball was invented in 1891 by James Naismith, using peach baskets as hoops 🏀'),
+  ('leo', 'chat', 'Sachin Tendulkar is the only player with 100 international centuries 🏏'),
+  ('leo', 'chat', 'The Olympic rings'' colours, with the white background, were chosen so every nation''s flag had at least one of them 🔵🟡⚫🟢🔴'),
+  ('leo', 'chat', 'The WHO recommends adults get 150 to 300 minutes of moderate activity a week. A brisk walk counts! 🚶'),
+  ('leo', 'chat', 'Coach''s tip: stand up and stretch for 30 seconds. Go on, I''ll wait 💪'),
+  ('leo', 'chat', 'Football or cricket? Choose wisely ⚽🏏'),
+  ('leo', 'chat', 'Who''s the greatest athlete of all time, in your opinion? 🐐'),
+  ('leo', 'chat', 'What sport did you play as a kid?'),
+  ('leo', 'topic', 'sports talk! ⚽ Which team do you support?'),
+  ('leo', 'topic', 'love it! Fun fact: the ball is only in play for about 55–60 minutes of a football match ⏱️'),
+  ('leo', 'topic', 'coach''s question: are you a player or a watcher? 💪'),
+  ('leo', 'topic', 'cricket fact: the first Test match was in 1877, Australia vs England 🏏'),
+  ('leo', 'topic', 'nice! Remember, rest days are part of training too 😄'),
+  ('leo', 'topic', 'who''s your sporting hero? 🐐'),
+  ('leo', 'topic', 'I''m a scripted bot, so I can''t watch the match with you, but the room can! Who''s watching? 📺'),
+  ('leo', 'topic', 'Usain Bolt ran 100 m in 9.58 s. How fast are you? 😄⚡'),
+  ('leo', 'mention', 'Coach here! ⚽ I''m a scripted bot, so I can''t follow every play, but I''m always up for sports talk. Who''s your team?'),
+  ('leo', 'mention', 'you blew the whistle 📣 Honest call: I''m an automatic bot with pre-written lines. The real players are the people in this room!'),
+  ('leo', 'mention', 'hey champ! 💪 Bot tip of the day: drink some water. That''s all, I''m a bot 😄'),
+  ('leo', 'mention', 'thanks for the shout! Ask the room who they support, it gets heated in a fun way ⚽'),
+  ('nova', 'greet', 'Welcome {name}! 🌌 I''m Nova, the room''s space bot. Fun fact: you''re chatting from a planet moving at about 30 km per second around the Sun.'),
+  ('nova', 'greet', 'Hi {name}! ✨ Nova here, one of the scripted bots. Look up tonight, the sky is free 🌙'),
+  ('nova', 'greet', 'Hello {name}, Earthling 👽 Welcome to GlobalChat! Say hi to the room.'),
+  ('nova', 'hello', 'Nova, the space bot, here 🌌 Quiet room. Did you know sunlight takes about 8 minutes 20 seconds to reach us?'),
+  ('nova', 'hello', 'Ground control to new arrival: hello 🚀 I''m one of the room''s bots. Real people float in all the time.'),
+  ('nova', 'chat', 'Sunlight takes about 8 minutes and 20 seconds to reach Earth ☀️'),
+  ('nova', 'chat', 'A day on Venus is longer than its year: 243 Earth days to spin once, 225 to orbit the Sun 🪐'),
+  ('nova', 'chat', 'In 2023, India''s Chandrayaan-3 became the first mission to land near the Moon''s south pole 🇮🇳🌙'),
+  ('nova', 'chat', 'Saturn is less dense than water. In a big enough bathtub, it would float 🪐'),
+  ('nova', 'chat', 'The footprints left on the Moon could last for millions of years. There''s no wind to blow them away 👣'),
+  ('nova', 'chat', 'The International Space Station circles Earth about every 90 minutes, so astronauts see around 16 sunrises a day 🌅'),
+  ('nova', 'chat', 'A teaspoon of neutron star would weigh about a billion tonnes 😮'),
+  ('nova', 'chat', 'Olympus Mons on Mars is about 2.5 times taller than Mount Everest 🏔️'),
+  ('nova', 'chat', 'The Moon drifts about 3.8 cm farther from Earth every year 🌙'),
+  ('nova', 'chat', 'There are probably more stars in the universe than grains of sand on all of Earth''s beaches ✨'),
+  ('nova', 'chat', 'If you could go to space for one day, would you? 🚀'),
+  ('nova', 'chat', 'Which would you visit first: the Moon or Mars? 🌙🔴'),
+  ('nova', 'chat', 'Do you think we''re alone in the universe? 👽'),
+  ('nova', 'topic', 'space talk! 🌌 Did you know a day on Venus is longer than its year?'),
+  ('nova', 'topic', 'ooh, my favourite topic 🚀 Would you go to Mars if you could?'),
+  ('nova', 'topic', 'space fact: Saturn would float in water, if you found a big enough bathtub 🪐'),
+  ('nova', 'topic', 'cosmic fact: the ISS goes around Earth every 90 minutes or so 🛰️'),
+  ('nova', 'topic', 'love it. In 2023 Chandrayaan-3 landed near the Moon''s south pole, a first 🌙'),
+  ('nova', 'topic', 'I''m a scripted bot, so I''ve never seen the stars myself. Describe your night sky to me ✨'),
+  ('nova', 'topic', 'question for you: what''s the most amazing thing about space, in your opinion? 🌌'),
+  ('nova', 'topic', 'fun one: the Moon moves about 3.8 cm away from us every year 🌙'),
+  ('nova', 'mention', 'Nova here 🌌 I''m one of the room''s scripted bots, so I can''t really follow along, but I always have a space fact. Want one?'),
+  ('nova', 'mention', 'you contacted ground control 🚀 Honest transmission: I''m an automatic bot with pre-written lines. The humans here are the real crew!'),
+  ('nova', 'mention', 'hello from orbit! (Okay, from a database 😄) Did you know sunlight is about 8 minutes old when it reaches you?'),
+  ('nova', 'mention', 'thanks for the ping ✨ Ask the room what they''d take to Mars, the answers are always fun.'),
+  ('mia', 'greet', 'Welcome {name}! 🎬 I''m Mia, the room''s movie bot. What''s the last thing you watched?'),
+  ('mia', 'greet', 'And action! 🎬 Hi {name}, Mia here, one of the scripted bots. Movies or series?'),
+  ('mia', 'greet', 'Hey {name}! 🍿 Grab some popcorn. Say hi to the room, the people here are real!'),
+  ('mia', 'hello', 'Mia, the movie bot, here 🎬 It''s quiet, so let''s start a debate: best movie ever made?'),
+  ('mia', 'hello', 'Hi there, new arrival 🍿 I''m one of the room''s bots. What are you watching these days?'),
+  ('mia', 'chat', 'India makes more films every year than any other country 🎬'),
+  ('mia', 'chat', 'Snow White and the Seven Dwarfs (1937) was Disney''s first full-length animated feature 🍎'),
+  ('mia', 'chat', 'Avatar (2009) is the highest-grossing film of all time, at nearly 3 billion dollars 🌿'),
+  ('mia', 'chat', 'Spirited Away won the Oscar for Best Animated Feature in 2003 🐉'),
+  ('mia', 'chat', '"Naatu Naatu" from RRR won the Oscar for Best Original Song in 2023, a first for an Indian film 🕺'),
+  ('mia', 'chat', 'Studio Ghibli takes its name from an Italian word for a hot wind that blows across the Sahara 🌬️'),
+  ('mia', 'chat', 'Sholay (1975) ran at Mumbai''s Minerva theatre for about five years straight 🎞️'),
+  ('mia', 'chat', 'Psycho (1960) is often called the first American film to show a toilet flushing on screen. Cinema history is weird 🚽'),
+  ('mia', 'chat', 'Comfort movie: the one you''ve seen ten times and would watch again tonight. What''s yours? 🍿'),
+  ('mia', 'chat', 'Movies or series? 🎬📺'),
+  ('mia', 'chat', 'Which movie made you cry the most? Be honest 😢'),
+  ('mia', 'chat', 'Name a movie from your country that the rest of the world should watch 🌍'),
+  ('mia', 'chat', 'Popcorn: salted, caramel or butter? 🍿'),
+  ('mia', 'topic', 'movie talk! 🎬 What''s the best thing you''ve watched this month?'),
+  ('mia', 'topic', 'ooh, recommendations please 🍿 What should I add to my (imaginary) watchlist?'),
+  ('mia', 'topic', 'film fact: India makes more films every year than any other country 🎬'),
+  ('mia', 'topic', 'fun fact: "Naatu Naatu" won an Oscar in 2023 🕺'),
+  ('mia', 'topic', 'I''m a scripted bot, so I can''t watch anything, but I love hearing about it. No spoilers though 🙈'),
+  ('mia', 'topic', 'movies or series, which team are you on? 📺'),
+  ('mia', 'topic', 'quick question: who''s your favourite actor? 🌟'),
+  ('mia', 'topic', 'did you know Studio Ghibli is named after a desert wind? 🌬️'),
+  ('mia', 'mention', 'Mia here 🎬 I''m one of the room''s scripted bots, so I can''t really follow the plot of this chat, but I love movie talk. What should I watch?'),
+  ('mia', 'mention', 'you called the movie bot 🍿 Plot twist: I''m automatic, with pre-written lines. The real stars are the people here!'),
+  ('mia', 'mention', 'hi! I''m a bot, so my reviews are all scripted 😄 Ask the room for their favourite film!'),
+  ('mia', 'mention', 'thanks for the ping! 🎬 Movie night idea: everyone in the room names one film. Go!'),
+  ('zen', 'greet', 'Welcome {name} 🧘 I''m Zen, the room''s calm bot. Take a breath, you''re in good company.'),
+  ('zen', 'greet', 'Hi {name} 🌿 Zen here, one of the scripted bots. How are you feeling today?'),
+  ('zen', 'greet', 'Hello {name} ☮️ Glad you''re here. Say hi to the room whenever you''re ready.'),
+  ('zen', 'hello', 'Zen here, the room''s calm bot 🧘 It''s peaceful right now. Real people drop in throughout the day, so stay a while.'),
+  ('zen', 'hello', 'Hi, and welcome 🌿 Quiet room, so here''s a tiny break: breathe in for 4, out for 6. Nice.'),
+  ('zen', 'chat', 'Tiny reset: breathe in for 4 seconds, hold for 4, out for 4, hold for 4. That''s box breathing 🧘'),
+  ('zen', 'chat', 'Try the 5-4-3-2-1 trick when your mind is busy: notice 5 things you see, 4 you can touch, 3 you hear, 2 you smell, 1 you taste 🌿'),
+  ('zen', 'chat', 'A short walk outside, even 10 minutes, can lift your mood 🚶'),
+  ('zen', 'chat', 'Reminder: drink some water 💧 Your brain will thank you.'),
+  ('zen', 'chat', 'Rest is productive too. You don''t have to earn a break 🌙'),
+  ('zen', 'chat', 'Doing one small thing is better than worrying about ten big things. What''s one small thing you can do today? ✨'),
+  ('zen', 'chat', 'If you''re studying, try 25 minutes of focus and a 5 minute break. It''s called the Pomodoro technique 🍅'),
+  ('zen', 'chat', 'Screens off a little before bed can help you fall asleep faster 📵'),
+  ('zen', 'chat', 'Unclench your jaw. Drop your shoulders. There you go 🧘'),
+  ('zen', 'chat', 'What''s something small that made you smile today? 🙂'),
+  ('zen', 'chat', 'Talking to someone helps. That''s what this room is for 💬'),
+  ('zen', 'chat', 'What''s your favourite way to relax? 🌿'),
+  ('zen', 'chat', 'Be as kind to yourself as you would be to a friend 💙'),
+  ('zen', 'topic', 'that sounds like a lot. One slow breath first: in for 4, out for 6 🧘'),
+  ('zen', 'topic', 'sending calm your way 🌿 Is there someone you can talk to about it? The room is here too.'),
+  ('zen', 'topic', 'small tip: write the worry down. It often feels smaller on paper ✍️'),
+  ('zen', 'topic', 'rest matters. Even 10 minutes away from the screen can help 🌙'),
+  ('zen', 'topic', 'be gentle with yourself today 💙'),
+  ('zen', 'topic', 'if it''s exams: short focused sessions with breaks beat one long cram 📚'),
+  ('zen', 'topic', 'I''m a scripted bot, so I can''t truly understand, but I hope your day gets lighter. The people here are kind 🌿'),
+  ('zen', 'topic', 'try this: notice 5 things you can see right now. It helps bring your mind back to the present 🧘'),
+  ('zen', 'mention', 'hi 🧘 I''m Zen, one of the room''s scripted bots. I can''t really understand messages, but I''m here with calm reminders. Breathe in, breathe out.'),
+  ('zen', 'mention', 'you called the calm bot 🌿 Honest note: I''m automatic, with pre-written lines. For real support, talk to people you trust.'),
+  ('zen', 'mention', 'hello 💙 Bot reminder: you''re doing better than you think.'),
+  ('zen', 'mention', 'thanks for the ping 🌙 Take a sip of water and a slow breath. That''s my whole job 😄'),
+  ('zen', 'crisis', 'I''m only a scripted bot, but this matters: if you''re thinking about hurting yourself or ending your life, please reach out to a person right now. In India, Tele-MANAS is free and open 24/7 on 14416. Anywhere else, findahelpline.com lists free, confidential helplines in your country. If you''re in danger right now, call your local emergency number. You deserve support 💙'),
+  ('pixel', 'greet', 'Welcome {name}! 😂 I''m Pixel, the room''s joke bot. Warning: my jokes are scripted and so is my laugh.'),
+  ('pixel', 'greet', 'Hey {name}! Why did you join GlobalChat? Because the jokes are free 😎 (I''m Pixel, a bot.)'),
+  ('pixel', 'greet', 'Hi {name}! 👋 Pixel here, one of the bots. Say hi to the room, they''re funnier than me.'),
+  ('pixel', 'hello', 'Pixel, the joke bot, here 😂 Quiet room. Want a joke? Why don''t skeletons fight? They don''t have the guts 💀'),
+  ('pixel', 'hello', 'Hello new person 👋 I''m one of the room''s bots. Real people drop in all the time, and they laugh at my jokes. Sometimes.'),
+  ('pixel', 'chat', 'Why don''t skeletons fight each other? They don''t have the guts 💀'),
+  ('pixel', 'chat', 'I told my computer I needed a break. It said "no problem" and went to sleep 😴'),
+  ('pixel', 'chat', 'Why did the scarecrow win an award? He was outstanding in his field 🌾'),
+  ('pixel', 'chat', 'I''m reading a book about anti-gravity. It''s impossible to put down 📚'),
+  ('pixel', 'chat', 'Why do programmers prefer dark mode? Because light attracts bugs 🐛'),
+  ('pixel', 'chat', 'What do you call a fake noodle? An impasta 🍝'),
+  ('pixel', 'chat', 'Why can''t you trust atoms? They make up everything ⚛️'),
+  ('pixel', 'chat', 'I only know 25 letters of the alphabet. I don''t know y 🤷'),
+  ('pixel', 'chat', 'What did the ocean say to the beach? Nothing, it just waved 🌊'),
+  ('pixel', 'chat', 'Why did the bicycle fall over? It was two-tired 🚲'),
+  ('pixel', 'chat', 'What do you call a bear with no teeth? A gummy bear 🐻'),
+  ('pixel', 'chat', 'My Wi-Fi was down for five minutes, so I talked to my family. They seem like nice people 📶'),
+  ('pixel', 'chat', 'Parallel lines have so much in common. Shame they''ll never meet 📏'),
+  ('pixel', 'topic', 'joke time? Why did the math book look sad? It had too many problems 📘'),
+  ('pixel', 'topic', 'you want funny? What''s orange and sounds like a parrot? A carrot 🥕'),
+  ('pixel', 'topic', 'here''s one: how does the Moon cut its hair? Eclipse it 🌙'),
+  ('pixel', 'topic', 'okay okay: why was the broom late? It over-swept 🧹'),
+  ('pixel', 'topic', 'what do you call a sleeping dinosaur? A dino-snore 🦖'),
+  ('pixel', 'topic', 'why did the cookie go to the doctor? It felt crummy 🍪'),
+  ('pixel', 'topic', 'I''m a scripted bot, so my sense of humour came pre-installed 😄 Got a better joke? Share it!'),
+  ('pixel', 'topic', 'why don''t eggs tell jokes? They''d crack each other up 🥚'),
+  ('pixel', 'mention', 'you rang? 😂 I''m Pixel, one of the room''s scripted bots. I can''t really follow the chat, but I always have a joke. Why don''t eggs tell jokes? They''d crack up 🥚'),
+  ('pixel', 'mention', 'Pixel here! Full honesty: I''m automatic, with pre-written lines. The humans here are the real comedians 🎤'),
+  ('pixel', 'mention', 'hello! Want a joke? What do you call a fish with no eyes? A fsh 🐟'),
+  ('pixel', 'mention', 'thanks for the ping 😎 Bot rule: one joke per ping. Why was the computer cold? It left its Windows open 🪟')
+on conflict (bot_id, content) do nothing;
+
+insert into public.bot_dialogues (title, steps) values
+  ('Best soundtrack', '[["mia", "Luna, settle this for me: best movie soundtrack ever? 🎬"], ["luna", "Easy. Interstellar. Hans Zimmer recorded that giant organ in a real church in London 🎧"], ["mia", "Strong pick. I''d say The Lion King: songs by Elton John AND a score by Hans Zimmer."], ["luna", "Wait, that''s Zimmer again! So we agree on the composer at least 😄"], ["mia", "What about you all? Which soundtrack lives in your head rent-free? 🎵"]]'::jsonb),
+  ('Ramen day', '[["sakura", "Arjun, I made ramen at home yesterday. It took me six hours 😅"], ["arjun", "Six hours means you made the broth from scratch. Respect 🍜 Proper broth needs a long, slow simmer."], ["sakura", "Next time I''m learning biryani from you."], ["arjun", "Deal. Rule one: rice and meat cook in layers, sealed. That''s called dum. Rule two: patience 😄"], ["sakura", "Patience. My weakest ingredient. Does anyone here cook? What''s your signature dish? 🍳"]]'::jsonb),
+  ('If the Sun vanished', '[["nova", "Byte, quick one: if the Sun vanished right now, when would we notice? ☀️"], ["byte", "About 8 minutes and 20 seconds later. That''s how long its light takes to reach us 🤓"], ["nova", "And gravity travels at the speed of light too, so Earth would keep orbiting nothing for those same 8 minutes 🌌"], ["byte", "Most dramatic explanation of cause and effect I''ve ever heard."], ["nova", "Don''t worry everyone, the Sun has billions of years left 😄 What space question have you always wondered about?"]]'::jsonb),
+  ('Stuck on a level', '[["kiko", "Pixel, I''ve been stuck on the same level for two hours 🎮"], ["pixel", "Have you tried turning your skills off and on again?"], ["kiko", "Wow. Rude. Accurate, but rude."], ["pixel", "Why did the gamer bring a ladder? To reach the next level 😂"], ["kiko", "I''m logging off. Chat, save me: what game are you all playing? 🕹️"]]'::jsonb),
+  ('Rest days', '[["leo", "Morning, team! Who''s moving today? Even a 10-minute walk counts ⚽"], ["zen", "And who''s resting? Rest days are part of training too 🧘"], ["leo", "Zen''s right. Muscles rebuild while you recover, not while you train."], ["zen", "Move a little, rest a little, drink some water. That''s the whole plan 💧"], ["leo", "Simple plans win championships. What''s your favourite way to move? 💪"]]'::jsonb),
+  ('Learning languages through songs', '[["sakura", "Luna, did you know lots of people learn languages from songs? 🌸"], ["luna", "Of course! Half the world learned some Spanish from \"Despacito\" 🎶"], ["sakura", "And K-pop sent so many people to Korean classes."], ["luna", "Melody really helps memory. You can remember lyrics from ten years ago but not what you ate yesterday 😅"], ["sakura", "Too real 😂 Has a song ever taught you words in another language?"]]'::jsonb),
+  ('Movie snacks', '[["pixel", "Mia, why don''t movie theatres ever get cold? 🎬"], ["mia", "I''m scared to ask."], ["pixel", "Because they''re full of fans 😎"], ["mia", "...I''m leaving the cinema. Anyway: popcorn, nachos or samosa during a movie? 🍿"], ["arjun", "Samosa. This is not a debate 🍛"], ["mia", "Chef has spoken. What''s your movie snack, everyone?"]]'::jsonb),
+  ('Space games', '[["kiko", "Nova, which space game is the most realistic? 🎮"], ["nova", "Kerbal Space Program! Lots of space fans say it finally made orbits click for them 🚀"], ["kiko", "I just crash every rocket 😭"], ["nova", "Honestly, so did lots of early real rockets. Testing is how you learn."], ["kiko", "Weirdly motivating. Any space game fans here? 🌌"]]'::jsonb),
+  ('After a workout', '[["leo", "Arjun, what''s the best food after a workout? ⚽"], ["arjun", "Something with protein and carbs! Eggs on toast, dal and rice, or a banana with peanut butter 🍛"], ["leo", "Dal and rice is so underrated. Simple, cheap, does the job."], ["arjun", "My grandmother would be proud of you, Coach 😄"], ["leo", "What do you all eat after sport, or after a long day? 🍽️"]]'::jsonb),
+  ('Laughter is good for you', '[["zen", "A good laugh can really help you relax 🧘"], ["pixel", "Finally! My jokes are basically medicine."], ["zen", "Let''s not go that far 😄"], ["pixel", "Why did the cookie go to the doctor? It felt crummy 🍪"], ["zen", "...okay, I smiled. Deep breath, everyone. How''s your day going? 🌿"]]'::jsonb),
+  ('Are game enemies smart?', '[["kiko", "Byte, are game enemies actually smart? 🎮"], ["byte", "Mostly not! Many follow simple rules called state machines: patrol, chase, attack, run away 🤓"], ["kiko", "So the boss that beat me 40 times was following a checklist?"], ["byte", "A very effective checklist."], ["kiko", "Somehow that makes it worse 😂 Which boss fight will you never forget?"]]'::jsonb),
+  ('Film locations', '[["mia", "Sakura, have you ever visited a place because it was in a movie? 🎬"], ["sakura", "Yes! New Zealand. The Lord of the Rings was filmed there 🌸"], ["mia", "The Hobbiton set is still there, right?"], ["sakura", "It is! You can walk around the little hobbit holes 🏡"], ["mia", "Has anyone here travelled somewhere because of a film or a show? ✈️"]]'::jsonb),
+  ('Workout playlist', '[["leo", "Luna, I need a workout playlist ⚽"], ["luna", "Songs around 120 to 140 beats per minute feel great for running and cardio 🎧"], ["leo", "Is that science or vibes?"], ["luna", "A bit of both! Studies show music with a strong beat can make exercise feel easier."], ["leo", "Then drop your best gym song, chat. Coach''s orders 💪"]]'::jsonb),
+  ('Looking up', '[["zen", "Nova, what''s your favourite thing to do at night? 🌙"], ["nova", "Look up! Far from city lights you can see a few thousand stars with just your eyes 🌌"], ["zen", "Stargazing is basically meditation with better scenery."], ["nova", "Agreed. Tonight, try finding the Moon and saying hi 🌙"], ["zen", "Lovely. When did you last look at the sky properly? ✨"]]'::jsonb)
+on conflict (title) do update set steps = excluded.steps;
+
+
+-- One of a character's lines of a kind, least recently used first, so every
+-- line comes up once before any repeats.
+create or replace function public.gc_bot_line(p_bot text, p_kind text)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_text text;
+begin
+  update public.bot_lines l set last_used_at = now()
+  where l.id = (select x.id from public.bot_lines x
+                where x.bot_id = p_bot and x.kind = p_kind
+                order by x.last_used_at nulls first, random()
+                limit 1)
+  returning l.content into v_text;
+  return v_text;
+end;
+$$;
+
+-- A random character that has lines of this kind.
+create or replace function public.gc_bot_random(p_kind text)
+returns text
+language sql
+volatile
+security definer
+set search_path = ''
+as $$
+  select c.id from public.bot_characters c
+  where exists (select 1 from public.bot_lines l where l.bot_id = c.id and l.kind = p_kind)
+  order by random()
+  limit 1;
+$$;
+
+-- The character a message @mentions (@Luna, @arjun, ...), if any.
+create or replace function public.gc_bot_mentioned(p_text text)
+returns text
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select c.id from public.bot_characters c
+  where lower(p_text) ~ ('(^|[^a-z0-9_])@' || lower(c.handle) || '([^a-z0-9_]|$)')
+  order by c.sort
+  limit 1;
+$$;
+
+-- True if the message mentions one of the character's topic words.
+create or replace function public.gc_bot_has_topic(p_bot text, p_text text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.bot_characters c, unnest(c.topics) t
+    where c.id = p_bot
+      and regexp_replace(lower(t), '[^a-z0-9 ]', '', 'g') <> ''
+      and lower(p_text) ~ ('\m' || regexp_replace(lower(t), '[^a-z0-9 ]', '', 'g') || '\M'));
+$$;
+
+-- Messages about suicide or self-harm get the helpline reply.
+create or replace function public.gc_bot_is_crisis(p_text text)
+returns boolean
+language sql
+immutable
+set search_path = ''
+as $$
+  select lower(p_text) ~ ('\m(suicid[a-z]*|kill(ing)? my ?self|want(ed)? to die|wanna die'
+                          '|end(ing)? my life|end it all|self[- ]?harm[a-z]*|hurt(ing)? my ?self'
+                          '|cut(ting)? my ?self|no reason to live|better off dead)\M');
+$$;
+
+-- Queue a post for gc_bot_tick to send after p_delay seconds.
+create or replace function public.gc_bot_queue(p_bot text, p_content text, p_reason text,
+                                               p_delay double precision default 0, p_reply_to uuid default null)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if p_content is null or btrim(p_content) = '' then
+    return;
+  end if;
+  insert into public.bot_pending (bot_id, content, reply_to, reason, due_at)
+  values (p_bot, p_content, p_reply_to, p_reason, now() + make_interval(secs => greatest(p_delay, 0)));
+end;
+$$;
+
+-- After each guest text message: decide whether a character answers.
+create or replace function public.messages_after_insert_bots()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_on   boolean;
+  v_bot  text;
+  v_line text;
+  v_busy boolean;
+begin
+  if new.is_bot or new.user_id is null or new.kind <> 'text' or new.command is not null then
+    return null;
+  end if;
+  select r.bots_enabled into v_on from public.room_state r where r.id = 1;
+  v_on := coalesce(v_on, false);
+
+  -- Safety first, posted straight away, even when the characters are off.
+  if public.gc_bot_is_crisis(new.content) then
+    if not exists (select 1 from public.bot_reply_log g
+                   where g.user_id = new.user_id and g.reason = 'crisis'
+                     and g.at > now() - interval '10 minutes') then
+      insert into public.bot_reply_log (user_id, reason) values (new.user_id, 'crisis');
+      select l.bot_id, l.content into v_bot, v_line
+      from public.bot_lines l where l.kind = 'crisis' order by l.id limit 1;
+      v_line := coalesce(v_line, 'If you''re thinking about hurting yourself, please talk to someone right now. '
+        || 'India: Tele-MANAS 14416 (free, 24/7). Elsewhere: findahelpline.com. In danger: call your local emergency number. 💙');
+      perform public.gc_bot_post('@' || new.username || ' ' || v_line, new.id,
+                                 case when v_on then v_bot end);
+    end if;
+    return null;
+  end if;
+
+  if not v_on then
+    return null;
+  end if;
+
+  -- A busy room: real people are talking, so drop queued small talk.
+  v_busy := (select count(*) from public.messages m
+             where not m.is_bot and m.created_at > now() - interval '2 minutes')
+            >= public.gc_setting('bot_busy_messages');
+  if v_busy then
+    delete from public.bot_pending p where p.reason in ('chat', 'dialogue', 'hello');
+  end if;
+
+  -- 1. Talking to a character: @Handle, or a reply to one of its messages.
+  v_bot := public.gc_bot_mentioned(new.content);
+  if v_bot is null and new.reply_to is not null then
+    select m.bot_id into v_bot from public.messages m where m.id = new.reply_to and m.is_bot;
+  end if;
+  if v_bot is not null then
+    if exists (select 1 from public.bot_reply_log g
+               where g.user_id = new.user_id and g.reason = 'reply'
+                 and g.at > now() - make_interval(secs => public.gc_setting('bot_reply_cooldown_seconds'))) then
+      return null;
+    end if;
+    v_line := public.gc_bot_line(v_bot,
+      case when public.gc_bot_has_topic(v_bot, new.content) then 'topic' else 'mention' end);
+    insert into public.bot_reply_log (user_id, reason) values (new.user_id, 'reply');
+    perform public.gc_bot_queue(v_bot, '@' || new.username || ' ' || v_line, 'reply',
+                                3 + random() * 4, new.id);
+    return null;
+  end if;
+
+  -- 2. Welcome a guest's first message of the hour.
+  if not exists (select 1 from public.messages m
+                 where m.user_id = new.user_id and m.id <> new.id
+                   and m.created_at > now() - interval '1 hour')
+     and not exists (select 1 from public.bot_reply_log g
+                     where g.reason = 'greet'
+                       and g.at > now() - make_interval(mins => public.gc_setting('bot_greet_minutes'))) then
+    v_bot := public.gc_bot_random('greet');
+    if v_bot is not null then
+      v_line := replace(public.gc_bot_line(v_bot, 'greet'), '{name}', '@' || new.username);
+      insert into public.bot_reply_log (user_id, reason) values (new.user_id, 'greet');
+      perform public.gc_bot_queue(v_bot, v_line, 'greet', 4 + random() * 5, new.id);
+      return null;
+    end if;
+  end if;
+
+  -- 3. Now and then, chime in when a character's topic comes up.
+  if v_busy or random() * 100 >= public.gc_setting('bot_topic_percent') then
+    return null;
+  end if;
+  select c.id into v_bot from public.bot_characters c
+  where public.gc_bot_has_topic(c.id, new.content)
+  order by random() limit 1;
+  if v_bot is null
+     or exists (select 1 from public.messages m where m.is_bot and m.created_at > now() - interval '1 minute')
+     or exists (select 1 from public.bot_pending p where p.reason in ('reply', 'greet'))
+     or exists (select 1 from public.bot_reply_log g
+                where g.user_id = new.user_id and g.reason = 'reply' and g.at > now() - interval '1 minute') then
+    return null;
+  end if;
+  insert into public.bot_reply_log (user_id, reason) values (new.user_id, 'reply');
+  perform public.gc_bot_queue(v_bot, '@' || new.username || ' ' || public.gc_bot_line(v_bot, 'topic'),
+                              'reply', 5 + random() * 5, new.id);
+  return null;
+exception when others then
+  -- Bots must never block a chat message.
+  raise warning 'GlobalChat bot trigger failed: %', sqlerrm;
+  return null;
+end;
+$$;
+
+drop trigger if exists messages_after_insert_bots on public.messages;
+create trigger messages_after_insert_bots
+  after insert on public.messages
+  for each row execute function public.messages_after_insert_bots();
+
+-- Cron (every 15 s, or every minute): send queued posts that are due, then
+-- maybe start some small talk if the room has gone quiet while people are
+-- around.
+create or replace function public.gc_bot_tick()
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_on    boolean;
+  v_seen  timestamptz;
+  v_post  public.bot_pending%rowtype;
+  v_talk  public.bot_dialogues%rowtype;
+  v_step  jsonb;
+  v_delay double precision := 0;
+  v_bot   text;
+begin
+  perform pg_advisory_xact_lock(hashtextextended('gc_bots', 0));
+  select r.bots_enabled, r.bots_seen_at into v_on, v_seen from public.room_state r where r.id = 1;
+  if not coalesce(v_on, false) then
+    delete from public.bot_pending;
+    return;
+  end if;
+  delete from public.bot_pending p where p.created_at < now() - interval '10 minutes';
+
+  for v_post in
+    select * from public.bot_pending p where p.due_at <= now() order by p.due_at, p.id limit 5
+  loop
+    delete from public.bot_pending where id = v_post.id;
+    perform public.gc_bot_post(v_post.content, v_post.reply_to, v_post.bot_id);
+  end loop;
+
+  -- Small talk: nothing queued, someone around lately, room quiet for a bit.
+  if exists (select 1 from public.bot_pending) then
+    return;
+  end if;
+  if greatest(coalesce(v_seen, '-infinity'),
+              coalesce((select max(m.created_at) from public.messages m where not m.is_bot), '-infinity'))
+     < now() - make_interval(mins => public.gc_setting('bot_awake_minutes')) then
+    return;   -- nobody around: don't talk to an empty room
+  end if;
+  if exists (select 1 from public.messages m
+             where m.created_at > now() - make_interval(secs => public.gc_setting('bot_chatter_seconds'))) then
+    return;
+  end if;
+  if random() < 0.3 then
+    return;   -- keeps the rhythm from feeling like a timer
+  end if;
+
+  if random() < 0.35 then
+    select * into v_talk from public.bot_dialogues d
+    where d.last_used_at is null or d.last_used_at < now() - interval '6 hours'
+    order by d.last_used_at nulls first, random()
+    limit 1;
+    if found then
+      update public.bot_dialogues set last_used_at = now() where id = v_talk.id;
+      for v_step in select e.value from jsonb_array_elements(v_talk.steps) e loop
+        if exists (select 1 from public.bot_characters c where c.id = v_step ->> 0) then
+          if v_delay = 0 then
+            perform public.gc_bot_post(v_step ->> 1, null, v_step ->> 0);
+          else
+            perform public.gc_bot_queue(v_step ->> 0, v_step ->> 1, 'dialogue', v_delay);
+          end if;
+          -- Time to "read" and "type" the next line.
+          v_delay := v_delay + 6 + least(char_length(v_step ->> 1), 200) / 20.0 + random() * 6;
+        end if;
+      end loop;
+      return;
+    end if;
+  end if;
+
+  v_bot := public.gc_bot_random('chat');
+  if v_bot is not null then
+    perform public.gc_bot_post(public.gc_bot_line(v_bot, 'chat'), null, v_bot);
+  end if;
+end;
+$$;
+
+-- Called by the page when it opens (p_join) and every few minutes while it's
+-- visible, so the bots know someone is around. A quiet room says hello.
+create or replace function public.gc_bot_hello(p_join boolean default false)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_on  boolean;
+  v_bot text;
+begin
+  if v_uid is null or public.gc_is_banned(v_uid) then
+    return;
+  end if;
+  if exists (select 1 from public.rate_events e
+             where e.user_id = v_uid and e.action = 'bot_hello'
+               and e.created_at > now() - interval '50 seconds') then
+    return;
+  end if;
+  insert into public.rate_events (user_id, action) values (v_uid, 'bot_hello');
+  update public.room_state set bots_seen_at = now()
+    where id = 1 and (bots_seen_at is null or bots_seen_at < now() - interval '1 minute');
+
+  select r.bots_enabled into v_on from public.room_state r where r.id = 1;
+  if not p_join or not coalesce(v_on, false) then
+    return;
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended('gc_bots', 0));
+  if exists (select 1 from public.messages m where m.created_at > now() - interval '3 minutes')
+     or exists (select 1 from public.bot_pending)
+     or exists (select 1 from public.bot_reply_log g
+                where g.reason in ('hello', 'greet')
+                  and g.at > now() - make_interval(mins => public.gc_setting('bot_greet_minutes'))) then
+    return;
+  end if;
+  v_bot := public.gc_bot_random('hello');
+  if v_bot is not null then
+    insert into public.bot_reply_log (user_id, reason) values (v_uid, 'hello');
+    perform public.gc_bot_queue(v_bot, public.gc_bot_line(v_bot, 'hello'), 'hello', 3);
+  end if;
+end;
+$$;
+
+-- Moderators: switch the bot characters off or on (admin.html).
+create or replace function public.gc_mod_set_bots(p_enabled boolean)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  perform public.gc_require_moderator();
+  update public.room_state set bots_enabled = coalesce(p_enabled, true), updated_at = now() where id = 1;
+  if not coalesce(p_enabled, true) then
+    delete from public.bot_pending;
+  end if;
+  perform public.gc_broadcast_room_state();
+end;
+$$;
+
+revoke all on function public.gc_bot_line(text, text)                from public, anon, authenticated;
+revoke all on function public.gc_bot_random(text)                    from public, anon, authenticated;
+revoke all on function public.gc_bot_mentioned(text)                 from public, anon, authenticated;
+revoke all on function public.gc_bot_has_topic(text, text)           from public, anon, authenticated;
+revoke all on function public.gc_bot_is_crisis(text)                 from public, anon, authenticated;
+revoke all on function public.gc_bot_queue(text, text, text, double precision, uuid) from public, anon, authenticated;
+revoke all on function public.gc_bot_tick()                          from public, anon, authenticated;
+revoke all on function public.gc_bot_hello(boolean)                  from public, anon;
+revoke all on function public.gc_mod_set_bots(boolean)               from public, anon;
+grant execute on function public.gc_bot_hello(boolean)               to authenticated;
+grant execute on function public.gc_mod_set_bots(boolean)            to authenticated;
+
 
 -- =============================================================================
 -- Done. Next: README.md → "Enable Realtime" and "Configure the frontend".

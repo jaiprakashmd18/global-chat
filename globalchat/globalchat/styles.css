@@ -386,6 +386,7 @@ kbd {
 .person-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.9375rem; }
 .person-tag { font-size: 0.75rem; color: var(--muted); }
 .person.is-typing .person-tag { color: var(--hl); }
+.person.is-bot .person-tag { padding: 0 6px; border-radius: 999px; background: var(--accent-soft); color: var(--hl); font-weight: 600; }
 .person-more { padding: 6px 8px; font-size: 0.875rem; color: var(--muted); }
 
 .rules-card:not([open]) { gap: 0; }

@@ -201,9 +201,10 @@ After re-running `schema.sql` (and `check-setup.sql` shows all OK):
 - [ ] **Word filter:** a message with a listed word arrives masked (`f***`).
 - [ ] **Auto-hide:** three different guests report one message → it disappears for guests and appears as HIDDEN on the admin page.
 - [ ] **Admin page:** sign in at `/admin.html` with a moderator account; pin a message (📌 bar appears for everyone), turn on slow mode (🐢 banner, second message is refused), unhide, delete, ban, add/remove a filter word.
+- [ ] **Bot characters:** "Online now" lists the ten bots with a "bot" tag, and the count still shows only people. Open the page in a quiet room: within about 15 seconds one of them says hello. Your first message gets a welcome that @mentions you. Write `@Luna what music do you like?`: Luna answers within ~15 seconds. Leave the room quiet for a couple of minutes: a fact, joke or short bot conversation appears. Admin → Room → Bot characters → Off: they leave the online list and stop posting.
 - [ ] **Room bot:** while people are chatting, a 🧠 trivia question appears within 15 minutes; the first right answer gets a 🎉 reply. The ☀️ question of the day posts at 12:03 UTC and shows in the sidebar.
 - [ ] **Stats / word of the day:** the sidebar shows today's messages and people, and a word of the day.
 - [ ] **Share:** the share button opens the share sheet (phone) or copies the link (desktop). Pasting the link in WhatsApp shows the preview card once `og:image` has your full URL.
 - [ ] **Translate:** ⋯ → Translate translates in place (Chrome with the built-in translator) or opens Google Translate.
 
-`tests/local-db/community-tests.sql` (run by `tests/local-db/run.sh`) covers the database side: commands, word filter, stickers, voice, flags, editing, renaming, slow mode, pin, auto-hide, bans, trivia, question of the day and cleanup.
+`tests/local-db/community-tests.sql` (run by `tests/local-db/run.sh`) covers the database side: commands, word filter, stickers, voice, flags, editing, renaming, slow mode, pin, auto-hide, bans, trivia, question of the day and cleanup. `tests/local-db/bot-tests.sql` covers the bot characters: content, permissions, welcomes, mentions, replies, the helpline reply, the on/off switch, hello, small talk and stepping back in a busy room.

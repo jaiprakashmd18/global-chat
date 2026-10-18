@@ -29,6 +29,8 @@ const el = {
   panels: $('admin-panels'),
   slowMode: $('slow-mode'),
   slowSave: $('slow-save'),
+  botsMode: $('bots-mode'),
+  botsSave: $('bots-save'),
   pinCurrent: $('pin-current'),
   unpin: $('unpin'),
   roomStats: $('room-stats'),
@@ -168,7 +170,7 @@ async function refresh() {
       .select('id, created_at, reason, details, message_id, reported_user_id, reported_username, reported_content, reported_image_path, reported_at')
       .eq('status', 'open').order('created_at', { ascending: true }).limit(200),
     sb.from('messages')
-      .select('id, username, content, created_at, kind, is_bot, hidden, command, sticker, country, image_path, poll_options')
+      .select('id, username, content, created_at, kind, is_bot, bot_id, hidden, command, sticker, country, image_path, poll_options')
       .order('created_at', { ascending: false }).limit(150),
     sb.from('blocked_words').select('word').order('word'),
     sb.from('banned_users').select('user_id, reason, banned_until, created_at').order('created_at', { ascending: false }).limit(200),
@@ -193,6 +195,8 @@ function summary(m) {
   return m.content;
 }
 
+const author = (m) => (!m.is_bot ? m.username : m.bot_id ? `Bot ${m.bot_id}` : 'GlobalChat Bot');
+
 function renderRoom(rs) {
   if (!rs) return;
   el.slowMode.value = String(rs.slow_mode_seconds ?? 0);
@@ -200,8 +204,8 @@ function renderRoom(rs) {
     el.slowMode.append(node('option', { text: `${rs.slow_mode_seconds} s`, attrs: { value: String(rs.slow_mode_seconds) } }));
     el.slowMode.value = String(rs.slow_mode_seconds);
   }
-  el.pinCurrent.textContent = rs.pinned
-    ? `${rs.pinned.is_bot ? 'GlobalChat Bot' : rs.pinned.username}: ${summary(rs.pinned)}` : 'None';
+  el.botsMode.value = rs.bots_enabled === false ? 'off' : 'on';
+  el.pinCurrent.textContent = rs.pinned ? `${author(rs.pinned)}: ${summary(rs.pinned)}` : 'None';
   el.unpin.hidden = !rs.pinned;
   const s = rs.stats ?? {};
   el.roomStats.replaceChildren(
@@ -214,6 +218,11 @@ function renderRoom(rs) {
 el.slowSave.addEventListener('click', async () => {
   await run(sb.rpc('gc_mod_set_slow_mode', { p_seconds: Number(el.slowMode.value) }),
     Number(el.slowMode.value) ? 'Slow mode on.' : 'Slow mode off.');
+  refresh();
+});
+el.botsSave.addEventListener('click', async () => {
+  const on = el.botsMode.value === 'on';
+  await run(sb.rpc('gc_mod_set_bots', { p_enabled: on }), on ? 'Bot characters on.' : 'Bot characters off.');
   refresh();
 });
 el.unpin.addEventListener('click', async () => {
@@ -282,7 +291,7 @@ function renderMessages(list) {
     const flags = [m.is_bot ? 'bot' : '', m.hidden ? 'HIDDEN after reports' : '', m.command ? `/${m.command}` : '', m.country ?? '']
       .filter(Boolean).join(' · ');
     const li = node('li', { className: `admin-item${m.hidden ? ' is-hidden' : ''}` },
-      node('p', { className: 'admin-meta', text: `${m.is_bot ? 'GlobalChat Bot' : m.username} · ${time(m.created_at)}${flags ? ` · ${flags}` : ''}` }),
+      node('p', { className: 'admin-meta', text: `${author(m)} · ${time(m.created_at)}${flags ? ` · ${flags}` : ''}` }),
       node('p', { className: 'admin-text', text: summary(m) }));
     const actions = node('div', { className: 'admin-actions' },
       button('Pin', async () => { await run(sb.rpc('gc_mod_pin', { p_message_id: m.id }), 'Pinned.'); refresh(); }),

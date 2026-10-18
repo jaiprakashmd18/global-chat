@@ -47,10 +47,13 @@ from (values
   ('gc_rename()',                       to_regprocedure('public.gc_rename(text)') is not null),
   ('moderator functions',               to_regprocedure('public.gc_mod_ban_author(uuid,integer,text)') is not null),
   ('messages.gender column (labels)',   exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'messages' and column_name = 'gender')),
-  ('voice notes allowed in bucket',     exists (select 1 from storage.buckets where id = 'chat-images' and 'audio/webm' = any (allowed_mime_types)))
+  ('voice notes allowed in bucket',     exists (select 1 from storage.buckets where id = 'chat-images' and 'audio/webm' = any (allowed_mime_types))),
+  ('bot characters and their lines',    (select count(*) from public.bot_lines) >= 290),
+  ('messages.bot_id column',            exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'messages' and column_name = 'bot_id')),
+  ('gc_bot_hello() / gc_bot_tick()',    to_regprocedure('public.gc_bot_hello(boolean)') is not null and to_regprocedure('public.gc_bot_tick()') is not null)
 ) as checks(item, ok);
 
--- Scheduled jobs (pg_cron). Expect globalchat-cleanup, globalchat-trivia and
--- globalchat-daily-question. If this errors with "schema cron does not
+-- Scheduled jobs (pg_cron). Expect globalchat-bots, globalchat-cleanup,
+-- globalchat-daily-question and globalchat-trivia. If this errors with "schema cron does not
 -- exist", pg_cron isn't enabled: see README → Scheduled cleanup.
 select jobname, schedule, active from cron.job where jobname like 'globalchat-%' order by jobname;
