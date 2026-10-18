@@ -25,4 +25,19 @@ export const CONFIG = {
   // (requires Auth → Attack Protection → CAPTCHA to be enabled with the
   // matching secret key). Leave as '' to disable.
   TURNSTILE_SITE_KEY: '',
+
+  // Optional: donations. Fill in either part and a "Support GlobalChat" 💜
+  // button appears (sidebar, header, About). Leave both empty to hide it.
+  DONATE: {
+    // India: your UPI ID, e.g. 'yourname@okaxis'. People pay with GPay,
+    // PhonePe, Paytm or any UPI app (QR code on computers, a button on phones).
+    UPI_ID: 'devicinthamani04-3@okhdfcbank',
+    UPI_NAME: 'GlobalChat',          // name shown in the UPI app
+
+    // Anywhere: up to 4 https links, e.g.
+    //   { label: 'Buy me a coffee', url: 'https://buymeacoffee.com/yourname' },
+    //   { label: 'Ko-fi', url: 'https://ko-fi.com/yourname' },
+    //   { label: 'PayPal', url: 'https://paypal.me/yourname' },
+    LINKS: [],
+  },
 };
