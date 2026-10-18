@@ -3049,7 +3049,8 @@ function currentAmount() {
 function renderUpi(cfg, amount) {
   const params = new URLSearchParams({ pa: cfg.upi, pn: cfg.name, cu: 'INR', tn: 'Support GlobalChat' });
   if (amount) params.set('am', `${Number(amount).toFixed(2)}`);
-  const link = `upi://pay?${params.toString().replace(/\+/g, '%20')}`;
+  // Keep "@" literal in the UPI ID (as in NPCI's examples); some apps don't decode %40.
+  const link = `upi://pay?${params.toString().replace(/\+/g, '%20').replace(/%40/g, '@')}`;
   $('donate-pay').href = link;
   $('donate-pay').textContent = amount ? `Pay ₹${amount} with a UPI app` : 'Pay with a UPI app';
   drawQr(link);
