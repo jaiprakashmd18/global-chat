@@ -2942,6 +2942,45 @@ grant execute on function public.gc_bot_hello(boolean)               to authenti
 grant execute on function public.gc_mod_set_bots(boolean)            to authenticated;
 
 
+-- -----------------------------------------------------------------------------
+-- 13. Donations
+-- -----------------------------------------------------------------------------
+-- Optional UPI ID for the "Support GlobalChat" button, kept here instead of
+-- in config.js so it isn't in the public code. Set it yourself (don't put it
+-- in this file):
+--   insert into public.site_settings (key, value) values ('donate_upi', 'you@bank')
+--   on conflict (key) do update set value = excluded.value, updated_at = now();
+-- Remove it: delete from public.site_settings where key = 'donate_upi';
+-- The page gets it only through gc_donate_info() and never shows it as text,
+-- but it is inside the pay link and QR code, and a UPI app shows the payee's
+-- UPI ID when someone pays. For full privacy use a payment page instead
+-- (config.js → DONATE.LINKS).
+create table if not exists public.site_settings (
+  key        text primary key,
+  value      text not null,
+  updated_at timestamptz not null default now()
+);
+revoke all on public.site_settings from anon, authenticated;
+alter table public.site_settings enable row level security;
+
+create or replace function public.gc_donate_info()
+returns jsonb
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select jsonb_build_object(
+    'upi',  (select s.value from public.site_settings s
+             where s.key = 'donate_upi'
+               and s.value ~ '^[A-Za-z0-9._-]{2,200}@[A-Za-z][A-Za-z0-9.-]{1,63}$'),
+    'name', (select left(s.value, 50) from public.site_settings s where s.key = 'donate_name')
+  );
+$$;
+revoke all on function public.gc_donate_info() from public, anon;
+grant execute on function public.gc_donate_info() to authenticated;
+
+
 -- =============================================================================
 -- Done. Next: README.md → "Enable Realtime" and "Configure the frontend".
 -- =============================================================================
