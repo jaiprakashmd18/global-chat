@@ -31,7 +31,7 @@ export const CONFIG = {
   DONATE: {
     // India: your UPI ID, e.g. 'yourname@okaxis'. People pay with GPay,
     // PhonePe, Paytm or any UPI app (QR code on computers, a button on phones).
-    UPI_ID: 'devicinthamani04-3@okhdfcbank',
+    UPI_ID: '',
     UPI_NAME: 'GlobalChat',          // name shown in the UPI app
 
     // Anywhere: up to 4 https links, e.g.
