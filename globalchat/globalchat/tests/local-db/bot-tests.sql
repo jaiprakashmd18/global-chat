@@ -178,3 +178,16 @@ select payload ->> 'bots_enabled' from realtime.messages where event = 'room_sta
 \echo '--- B15 cleanup with bot data attached (expect no error)'
 select public.gc_cleanup();
 reset role;
+
+\echo '--- D1 donation UPI ID: hidden from guests except via gc_donate_info; junk ignored (expect permission denied, null, ok@bank, null)'
+set role authenticated;
+select set_config('request.jwt.claims','{"sub":"b0000000-0000-0000-0000-000000000001","role":"authenticated","is_anonymous":true}',false);
+select count(*) from public.site_settings;
+select public.gc_donate_info() ->> 'upi';
+reset role;
+insert into public.site_settings (key, value) values ('donate_upi', 'ok@bank') on conflict (key) do update set value = excluded.value;
+set role authenticated;
+select public.gc_donate_info() ->> 'upi';
+reset role;
+update public.site_settings set value = 'not a upi id' where key = 'donate_upi';
+select public.gc_donate_info() ->> 'upi';

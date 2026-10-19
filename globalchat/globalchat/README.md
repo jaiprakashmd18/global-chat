@@ -48,7 +48,12 @@ It's a static frontend (HTML, CSS, vanilla JS modules) on top of Supabase: anony
 - **Room stats** in the sidebar: messages and people today, this week, and the busiest hour in your time zone.
 - **Word of the day** from languages around the world.
 - **Share button** and a link-preview card (`og-image.png`) for WhatsApp, Instagram, X and others.
-- **Donations** 💜: fill in `DONATE` in `config.js` (a UPI ID for India and/or up to 4 links like Buy Me a Coffee, Ko-fi or PayPal) and a "Support GlobalChat" button appears in the sidebar, header and About. UPI shows a QR code on computers and a "Pay with a UPI app" button on phones, with ₹20 / ₹50 / ₹100 / ₹200 / any amount. Hidden while `DONATE` is empty. The QR library is self-hosted (`vendor/qrcode.js`, MIT).
+- **Donations** 💜: fill in `DONATE` in `config.js` (a UPI ID for India and/or up to 4 links like Buy Me a Coffee, Ko-fi or PayPal) and a "Support GlobalChat" button appears in the sidebar, header and About. UPI shows a QR code on computers and a "Pay with a UPI app" button on phones, with ₹20 / ₹50 / ₹100 / ₹200 / any amount. Hidden while nothing is set. The UPI ID is never shown as text. To keep it out of the public code, leave `UPI_ID` empty and store it in the database instead (Supabase SQL Editor, once):
+  ```sql
+  insert into public.site_settings (key, value) values ('donate_upi', 'yourname@bank')
+  on conflict (key) do update set value = excluded.value, updated_at = now();
+  ```
+  It's still inside the pay link and QR code, and UPI apps show the payee's UPI ID and bank name to whoever pays; for full privacy use a payment page link (Razorpay, Instamojo, Ko-fi) in `LINKS`. The QR library is self-hosted (`vendor/qrcode.js`, MIT).
 - **Translate** (⋯ → Translate): uses the browser's built-in translator when it has one (nothing leaves the device); otherwise it opens Google Translate in a new tab, which sends that message's text to Google.
 
 On phones, tap the online count to open **The room**: people online, flags, stats, question of the day and word of the day.

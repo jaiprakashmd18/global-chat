@@ -31,6 +31,9 @@ export const CONFIG = {
   DONATE: {
     // India: your UPI ID, e.g. 'yourname@okaxis'. People pay with GPay,
     // PhonePe, Paytm or any UPI app (QR code on computers, a button on phones).
+    // Anything here is public in your code. To keep the UPI ID out of the
+    // code, leave this empty and store it in the database instead
+    // (README → Donations). The page never shows it as text either way.
     UPI_ID: '',
     UPI_NAME: 'GlobalChat',          // name shown in the UPI app
 
