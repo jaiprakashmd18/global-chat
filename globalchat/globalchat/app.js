@@ -718,7 +718,7 @@ async function loadHistory({ backfill = false } = {}) {
   upsertMessages(batch, { initial });
   updateFeedState();
   loadExtras([...state.messages.keys()]);
-  if (!backfill) { loadRoomState(); maybeAskGender(); botHello(true); }
+  if (!backfill) { loadRoomState(); maybeAskGender(); botHello(true); loadDonateInfo(); }
 }
 
 const columns = () => TIER_COLUMNS[state.tier];
@@ -3116,7 +3116,9 @@ async function shareRoom() {
 }
 
 // =============================================================================
-// Donations (config.js → DONATE). Hidden unless the site owner filled it in.
+// Donations: config.js → DONATE, or a UPI ID kept in the database
+// (gc_donate_info, so it isn't in the public code). Hidden unless one is set.
+// The UPI ID is never shown as text; it's only inside the pay link / QR.
 // =============================================================================
 const UPI_ID_RE = /^[A-Za-z0-9._-]{2,256}@[A-Za-z][A-Za-z0-9.-]{1,63}$/;
 
@@ -3138,31 +3140,21 @@ function donateConfig() {
 }
 
 function setupDonations() {
-  const cfg = donateConfig();
-  document.querySelectorAll('[data-open-donate], [data-donate-about]').forEach((n) => { n.hidden = !cfg.enabled; });
-  if (!cfg.enabled) return;
-
+  const cfg = (state.donate = donateConfig());
   const dialog = $('donate-dialog');
   document.querySelectorAll('[data-open-donate]').forEach((b) => b.addEventListener('click', () => {
     b.closest('dialog')?.close();
     dialog.showModal();
-    if (cfg.upi) renderUpi(cfg, currentAmount());
+    if (state.donate.upi) renderUpi(state.donate, currentAmount());
   }));
   dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
 
   const upiBox = $('donate-upi');
-  upiBox.hidden = !cfg.upi;
-  if (cfg.upi) {
-    $('donate-upi-id').textContent = cfg.upi;
-    $('donate-copy').addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(cfg.upi); toast('UPI ID copied.'); }
-      catch { toast(`UPI ID: ${cfg.upi}`); }
-    });
-    upiBox.querySelectorAll('[data-amount]').forEach((b) => b.addEventListener('click', () => {
-      upiBox.querySelectorAll('[data-amount]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
-      renderUpi(cfg, b.dataset.amount);
-    }));
-  }
+  upiBox.querySelectorAll('[data-amount]').forEach((b) => b.addEventListener('click', () => {
+    upiBox.querySelectorAll('[data-amount]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    renderUpi(state.donate, b.dataset.amount);
+  }));
+  applyDonations();
 
   const linksBox = $('donate-links');
   linksBox.hidden = cfg.links.length === 0;
@@ -3175,6 +3167,26 @@ function setupDonations() {
     a.textContent = `${label} ↗`;
     return a;
   }));
+}
+
+function applyDonations() {
+  const cfg = state.donate;
+  cfg.enabled = Boolean(cfg.upi || cfg.links.length);
+  document.querySelectorAll('[data-open-donate], [data-donate-about]').forEach((n) => { n.hidden = !cfg.enabled; });
+  $('donate-upi').hidden = !cfg.upi;
+}
+
+// UPI ID stored in the database instead of config.js (see README → Donations).
+async function loadDonateInfo() {
+  if (state.donateLoaded || state.donate?.upi || !state.sb) return;
+  state.donateLoaded = true;
+  const { data, error } = await state.sb.rpc('gc_donate_info');
+  if (error) return;   // older database: no stored UPI ID
+  const upi = typeof data?.upi === 'string' && UPI_ID_RE.test(data.upi) ? data.upi : '';
+  if (!upi) return;
+  state.donate.upi = upi;
+  if (typeof data.name === 'string' && data.name.trim()) state.donate.name = data.name.trim().slice(0, 50);
+  applyDonations();
 }
 
 function currentAmount() {

@@ -50,7 +50,8 @@ from (values
   ('voice notes allowed in bucket',     exists (select 1 from storage.buckets where id = 'chat-images' and 'audio/webm' = any (allowed_mime_types))),
   ('bot characters and their lines',    (select count(*) from public.bot_lines) >= 290),
   ('messages.bot_id column',            exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'messages' and column_name = 'bot_id')),
-  ('gc_bot_hello() / gc_bot_tick()',    to_regprocedure('public.gc_bot_hello(boolean)') is not null and to_regprocedure('public.gc_bot_tick()') is not null)
+  ('gc_bot_hello() / gc_bot_tick()',    to_regprocedure('public.gc_bot_hello(boolean)') is not null and to_regprocedure('public.gc_bot_tick()') is not null),
+  ('gc_donate_info() (donations)',      to_regprocedure('public.gc_donate_info()') is not null)
 ) as checks(item, ok);
 
 -- Scheduled jobs (pg_cron). Expect globalchat-bots, globalchat-cleanup,

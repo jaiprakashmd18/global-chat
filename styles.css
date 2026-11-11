@@ -1662,8 +1662,6 @@ select.field { appearance: auto; }
 .donate-pay { text-decoration: none; }
 @media (hover: hover) and (pointer: fine) { .donate-pay { display: none; } }   /* computers: scan the QR */
 @media (hover: none) { .donate-qr, .donate-qr-note { display: none; } }        /* phones: tap the button */
-.donate-id { margin: 0; font-size: 0.9375rem; overflow-wrap: anywhere; text-align: center; }
-.donate-id span { color: var(--muted); }
 .donate-links .button { width: 100%; text-decoration: none; }
 
 /* Confetti */
